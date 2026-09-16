@@ -1,4 +1,5 @@
 package ch.fhnw.pepper_realtime.ui.compose.games
+import androidx.activity.compose.BackHandler
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
@@ -85,6 +86,7 @@ fun TicTacToeDialog(
     onUserMove: (position: Int) -> Unit,
     onDismiss: () -> Unit
 ) {
+    BackHandler(onBack = onDismiss)
     val yourTurnText = stringResource(R.string.ttt_your_turn)
     val aiThinkingText = stringResource(R.string.ttt_ai_thinking)
     val youWonText = stringResource(R.string.ttt_you_won)
@@ -253,4 +255,3 @@ private fun TicTacToeCell(
         )
     }
 }
-

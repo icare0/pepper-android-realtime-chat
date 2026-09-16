@@ -158,6 +158,15 @@ class TicTacToeGameManager @Inject constructor() {
     /**
      * Dismiss the game dialog and reset state.
      */
+    fun cancelGame() {
+        val wasActive = _uiState.value.isVisible && !_gameState.isGameOver
+        val callback = updateCallback
+        dismissGame()
+        if (wasActive) {
+            callback?.invoke(ActivityCancellation.message("the Tic Tac Toe game before finishing"), true)
+        }
+    }
+
     fun dismissGame() {
         autoCloseJob?.cancel()
         autoCloseJob = null

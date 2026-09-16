@@ -2,6 +2,7 @@ package ch.fhnw.pepper_realtime.tools.entertainment
 
 import android.util.Log
 import ch.fhnw.pepper_realtime.manager.YouTubePlayerManager
+import ch.fhnw.pepper_realtime.manager.ActivityCancellation
 import ch.fhnw.pepper_realtime.service.YouTubeSearchService
 import ch.fhnw.pepper_realtime.tools.ApiKeyRequirement
 import ch.fhnw.pepper_realtime.tools.ApiKeyType
@@ -81,9 +82,14 @@ class PlayYouTubeVideoTool : Tool {
                             }
 
                             override fun onPlayerClosed() {
-                                // Unmute microphone when video ends
+                                // Restore input before requesting a conversational response.
                                 context.toolHost.unmuteMicrophone()
-                                context.sendAsyncUpdate("🎵 YouTube video ended - microphone active again", false)
+                                if (!activity.isFinishing && !activity.isDestroyed) {
+                                    context.sendAsyncUpdate(
+                                        ActivityCancellation.message("the YouTube player") + " Video: ${video.title}.",
+                                        true
+                                    )
+                                }
                                 // Refresh chat UI to show any updates that were missed while overlay was active
                                 context.toolHost.refreshChatMessages()
                             }

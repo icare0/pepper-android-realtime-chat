@@ -6,6 +6,7 @@ import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
 import ch.fhnw.pepper_realtime.R
 import ch.fhnw.pepper_realtime.network.RealtimeApiProvider
+import ch.fhnw.pepper_realtime.network.GEMINI_38_LIVE_MODEL
 import ch.fhnw.pepper_realtime.network.XAI_LEGACY_MODEL_LABEL
 import ch.fhnw.pepper_realtime.network.XAI_THINK_FAST_MODEL
 import ch.fhnw.pepper_realtime.tools.ToolRegistry
@@ -38,7 +39,7 @@ class SettingsRepository @Inject constructor(
         get() {
             val defaultModel = when (apiProviderEnum) {
                 RealtimeApiProvider.XAI -> XAI_THINK_FAST_MODEL
-                RealtimeApiProvider.GOOGLE_GEMINI -> "models/gemini-3.1-flash-live-preview"
+                RealtimeApiProvider.GOOGLE_GEMINI -> GEMINI_38_LIVE_MODEL
                 else -> context.getString(R.string.openai_default_model)
             }
             val key = "${KEY_MODEL}_${apiProvider}"

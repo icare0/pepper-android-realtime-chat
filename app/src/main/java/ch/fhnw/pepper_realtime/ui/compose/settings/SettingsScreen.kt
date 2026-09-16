@@ -14,6 +14,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ch.fhnw.pepper_realtime.manager.ApiKeyManager
 import ch.fhnw.pepper_realtime.manager.SettingsRepository
 import ch.fhnw.pepper_realtime.network.RealtimeApiProvider
+import ch.fhnw.pepper_realtime.network.GEMINI_38_LIVE_MODEL
 import ch.fhnw.pepper_realtime.network.XAI_FAST_MODEL
 import ch.fhnw.pepper_realtime.network.XAI_THINK_FAST_1_MODEL
 import ch.fhnw.pepper_realtime.network.XAI_THINK_FAST_2_MODEL
@@ -55,6 +56,7 @@ fun SettingsScreen(
     val isXaiProvider = settings.apiProvider == RealtimeApiProvider.XAI.name
     val isGoogleProvider = settings.apiProvider == RealtimeApiProvider.GOOGLE_GEMINI.name
     val isGemini31 = RealtimeApiProvider.isGemini31Model(settings.model)
+    val isGemini38Live = RealtimeApiProvider.isGemini38LiveModel(settings.model)
     
     // Options - dynamic based on provider
     val openAiModels = listOf(
@@ -75,6 +77,7 @@ fun SettingsScreen(
     // Google Live API requires models/ prefix for BidiGenerateContent
     // Include fallback model for debugging
     val googleModels = listOf(
+        GEMINI_38_LIVE_MODEL,
         "models/gemini-3.1-flash-live-preview",
         "models/gemini-2.5-flash-native-audio-preview-12-2025",
         "models/gemini-2.0-flash-live-001"
@@ -383,7 +386,7 @@ fun SettingsScreen(
                     )
                     
                     if (isGemini31) {
-                        // Gemini 3.1+: thinkingLevel dropdown
+                        // Gemini 3.1: thinkingLevel dropdown
                         val thinkingLevels = listOf("minimal", "low", "medium", "high")
                         SettingsDropdown(
                             label = "Thinking Level",
@@ -391,7 +394,7 @@ fun SettingsScreen(
                             selectedOption = settings.googleThinkingLevel,
                             onOptionSelected = { viewModel.setGoogleThinkingLevel(it) }
                         )
-                    } else {
+                    } else if (!isGemini38Live) {
                         // Gemini 2.5: thinkingBudget slider
                         SettingsSlider(
                             label = "Thinking Budget",
@@ -412,7 +415,7 @@ fun SettingsScreen(
                         )
                     }
                     
-                    SettingsSwitch(
+                    if (!isGemini38Live) SettingsSwitch(
                         label = "Show Thinking",
                         description = if (isGemini31) "Display AI thinking traces in chat" else "Display AI thinking traces in chat (requires Thinking Budget > 0)",
                         checked = settings.googleShowThinking,

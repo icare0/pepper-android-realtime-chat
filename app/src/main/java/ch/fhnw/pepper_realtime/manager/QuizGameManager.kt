@@ -25,6 +25,8 @@ class QuizGameManager @Inject constructor() {
 
     // Callback for when user answers
     private var answerCallback: ((question: String, selectedOption: String) -> Unit)? = null
+    private var cancelCallback: (() -> Unit)? = null
+    private var answered = false
 
     /**
      * Show a quiz question.
@@ -37,9 +39,12 @@ class QuizGameManager @Inject constructor() {
         question: String,
         options: List<String>,
         correctAnswer: String,
+        onCancelled: () -> Unit = {},
         onAnswered: (question: String, selectedOption: String) -> Unit
     ) {
         answerCallback = onAnswered
+        cancelCallback = onCancelled
+        answered = false
         _state.value = QuizState(
             isVisible = true,
             question = question,
@@ -57,6 +62,8 @@ class QuizGameManager @Inject constructor() {
      */
     fun onAnswerSelected(selectedOption: String) {
         val currentState = _state.value
+        if (!currentState.isVisible || answered) return
+        answered = true
         answerCallback?.invoke(currentState.question, selectedOption)
         // Don't dismiss here - the QuizDialog has a LaunchedEffect that waits 4 seconds
         // to show the correct answer feedback before calling onDismiss
@@ -65,9 +72,18 @@ class QuizGameManager @Inject constructor() {
     /**
      * Dismiss the quiz dialog.
      */
+    fun cancelQuiz() {
+        val shouldNotify = _state.value.isVisible && !answered
+        val callback = cancelCallback
+        dismissQuiz()
+        if (shouldNotify) callback?.invoke()
+    }
+
     fun dismissQuiz() {
         _state.value = QuizState()
         answerCallback = null
+        cancelCallback = null
+        answered = false
         Log.i(TAG, "Quiz dismissed")
     }
 }

@@ -1,5 +1,7 @@
 package ch.fhnw.pepper_realtime.ui.compose.games
 
+import androidx.activity.compose.BackHandler
+
 import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -84,6 +86,7 @@ fun DrawingCanvasDialog(
     onClear: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    BackHandler(onBack = onDismiss)
     // Drawing state
     var paths by remember { mutableStateOf(listOf<StrokePath>()) }
     var currentPath by remember { mutableStateOf<StrokePath?>(null) }
@@ -466,4 +469,3 @@ private fun createBitmapFromPaths(
     
     return bitmap
 }
-

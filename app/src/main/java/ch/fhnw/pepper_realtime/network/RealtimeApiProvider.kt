@@ -7,6 +7,7 @@ const val XAI_THINK_FAST_1_MODEL = "grok-voice-think-fast-1.0"
 const val XAI_THINK_FAST_MODEL = XAI_THINK_FAST_2_MODEL
 const val XAI_FAST_MODEL = "grok-voice-fast-1.0"
 const val XAI_LEGACY_MODEL_LABEL = "Grok Voice Agent"
+const val GEMINI_38_LIVE_MODEL = "models/gemini-3.8-live"
 
 /**
  * Enumeration of available Realtime API providers
@@ -20,7 +21,7 @@ enum class RealtimeApiProvider(
     OPENAI_DIRECT("OpenAI Direct", "gpt-realtime-1.5"),
     XAI("x.ai Grok", XAI_THINK_FAST_MODEL),
     // Google Live API requires models/ prefix for BidiGenerateContent
-    GOOGLE_GEMINI("Google Gemini", "models/gemini-3.1-flash-live-preview");
+    GOOGLE_GEMINI("Google Gemini", GEMINI_38_LIVE_MODEL);
 
     fun getDisplayName(): String = displayName
 
@@ -138,14 +139,20 @@ enum class RealtimeApiProvider(
         }
 
         /**
-         * Returns true for Gemini 3.1+ models which use different API semantics
+         * Returns true for Gemini 3.1 models which use different API semantics
          * (thinkingLevel instead of thinkingBudget, realtimeInput for text, no proactive audio, etc.)
          */
         fun isGemini31Model(model: String?): Boolean {
             if (model.isNullOrBlank()) return false
             val normalized = model.trim().lowercase()
-            return normalized.contains("gemini-3")
+            return normalized.removePrefix("models/").startsWith("gemini-3.1-")
         }
+
+        fun isGemini38LiveModel(model: String?): Boolean =
+            model?.trim()?.lowercase()?.removePrefix("models/") == "gemini-3.8-live"
+
+        fun supportsGoogleImageToolResponse(model: String?): Boolean =
+            isGemini31Model(model) || isGemini38LiveModel(model)
 
         /**
          * Returns true for OpenAI Realtime models that support configurable reasoning effort

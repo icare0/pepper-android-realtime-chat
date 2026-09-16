@@ -412,13 +412,13 @@ class RealtimeSessionManager @Inject constructor() {
 
     /**
      * Send text message to Google Live API.
-     * Gemini 3.1+: uses realtimeInput (clientContent only for initial history seeding).
+     * Gemini 3.1: uses realtimeInput (clientContent only for initial history seeding).
      *   realtimeInput.text always triggers a model response, so silent context updates
      *   (triggerResponse=false) are skipped entirely for 3.1.
-     * Gemini 2.5: uses clientContent with turnComplete control.
+     * Gemini 3.8 Live and 2.5: use clientContent with turnComplete control.
      *
      * @param text Text message to send
-     * @param triggerResponse If true, triggers model response; if false, silent context update (2.5 only)
+     * @param triggerResponse If true, triggers model response; if false, silent context update (except 3.1)
      * @return true if sent successfully
      */
     fun sendGoogleTextMessage(text: String, triggerResponse: Boolean = true): Boolean {
@@ -460,12 +460,12 @@ class RealtimeSessionManager @Inject constructor() {
 
     /**
      * Send an image to Google Live API.
-     * Gemini 3.1+: uses realtimeInput.video format (clientContent restricted to initial history).
-     * Gemini 2.5: uses clientContent with inlineData.
+     * Gemini 3.1: uses realtimeInput.video format (clientContent restricted to initial history).
+     * Gemini 3.8 Live and 2.5: use clientContent with inlineData.
      *
      * @param base64 Base64-encoded image data
      * @param mime MIME type (e.g., "image/jpeg", "image/png")
-     * @param turnComplete If true, triggers model response; if false, silent context update (2.5 only)
+     * @param turnComplete If true, triggers model response; if false, silent context update (except 3.1)
      * @return true if sent successfully
      */
     fun sendGoogleImageMessage(base64: String, mime: String, turnComplete: Boolean = true): Boolean {
@@ -511,10 +511,17 @@ class RealtimeSessionManager @Inject constructor() {
      * @param toolName The name of the tool that was called
      * @param resultJson JSON string containing the tool result
      * @param scheduling Optional scheduling mode for NON_BLOCKING tools: "INTERRUPT", "WHEN_IDLE", or "SILENT".
-     *                   Ignored for Gemini 3.1+ (async function calls not supported).
+     *                   Ignored for Gemini 3.1 (async function calls not supported).
+     * @param parts Optional multimodal function response parts (for example inline image data).
      * @return true if sent successfully
      */
-    fun sendGoogleToolResult(callId: String, toolName: String, resultJson: String, scheduling: String? = null): Boolean {
+    fun sendGoogleToolResult(
+        callId: String,
+        toolName: String,
+        resultJson: String,
+        scheduling: String? = null,
+        parts: JSONArray? = null
+    ): Boolean {
         return try {
             // Normalize tool response
             val parsedResult = try {
@@ -542,6 +549,7 @@ class RealtimeSessionManager @Inject constructor() {
                         put("id", callId)
                         put("name", toolName)
                         put("response", normalizedResponse)
+                        if (parts != null) put("parts", parts)
                     }))
                 })
             }
@@ -607,13 +615,13 @@ class RealtimeSessionManager @Inject constructor() {
             generationConfig.put("thinkingConfig", JSONObject().apply {
                 put("thinkingLevel", settings.googleThinkingLevel)
             })
-        } else {
+        } else if (!RealtimeApiProvider.isGemini38LiveModel(settings.model)) {
             generationConfig.put("thinkingConfig", JSONObject().apply {
                 put("thinkingBudget", settings.googleThinkingBudget)
             })
         }
         
-        // Proactive audio - not supported in Gemini 3.1+
+        // Proactive audio - not supported in Gemini 3.1
         if (!isGemini31 && settings.googleProactiveAudio) {
             setup.put("proactivity", JSONObject().apply {
                 put("proactiveAudio", true)
@@ -692,12 +700,17 @@ class RealtimeSessionManager @Inject constructor() {
                     put("description", openAiDef.optString("description", ""))
                     
                     // Non-blocking tools:
-                    // - analyze_vision: image sent with turnComplete=true, response uses scheduling=SILENT
+                    // - legacy analyze_vision: image sent separately, response uses scheduling=SILENT
                     // - skipResponseIfAnnounced tools: action may be announced, response uses scheduling=SILENT
                     // NON_BLOCKING is required for scheduling to work
-                    if (toolName == "analyze_vision" || tool.skipResponseIfAnnounced) {
+                    val legacyVision = toolName == "analyze_vision" &&
+                        !RealtimeApiProvider.supportsGoogleImageToolResponse(settingsRepository?.model)
+                    if (legacyVision || tool.skipResponseIfAnnounced) {
                         put("behavior", "NON_BLOCKING")
                         Log.i(TAG, "Tool '$toolName' marked as NON_BLOCKING (skipResponseIfAnnounced=${tool.skipResponseIfAnnounced})")
+                    } else if (RealtimeApiProvider.isGemini38LiveModel(settingsRepository?.model)) {
+                        // 3.8 defaults to NON_BLOCKING; preserve existing tool sequencing.
+                        put("behavior", "BLOCKING")
                     }
                     
                     // Parameters
@@ -748,6 +761,9 @@ class RealtimeSessionManager @Inject constructor() {
             false
         }
     }
+
+    val pendingSendBytes: Long
+        get() = webSocket?.queueSize() ?: 0L
 
     fun close(code: Int, reason: String?) {
         if (connectionState == ConnectionState.DISCONNECTED) {
@@ -1162,4 +1178,3 @@ class RealtimeSessionManager @Inject constructor() {
         }
     }
 }
-

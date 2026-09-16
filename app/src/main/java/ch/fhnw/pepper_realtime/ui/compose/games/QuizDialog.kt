@@ -1,6 +1,11 @@
 package ch.fhnw.pepper_realtime.ui.compose.games
 
 import androidx.compose.animation.animateColorAsState
+import androidx.activity.compose.BackHandler
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.ui.res.stringResource
+import ch.fhnw.pepper_realtime.R
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -48,13 +53,16 @@ fun QuizDialog(
     options: List<String>,
     correctAnswer: String,
     onAnswered: (selectedOption: String) -> Unit,
-    onDismiss: () -> Unit
+    onClose: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    var answerState by remember { mutableStateOf<AnswerState>(AnswerState.NotAnswered) }
+    BackHandler(onBack = onClose)
+    var answerState by remember(question, options, correctAnswer) { mutableStateOf<AnswerState>(AnswerState.NotAnswered) }
     val correctIndex = options.indexOf(correctAnswer)
     
     // Auto-dismiss after answering
-    LaunchedEffect(answerState) {
+    LaunchedEffect(question, options, correctAnswer, answerState) {
         if (answerState is AnswerState.Answered) {
             delay(4000)
             onDismiss()
@@ -63,14 +71,14 @@ fun QuizDialog(
     
     // Fullscreen overlay instead of Dialog to preserve immersive mode
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             .background(ChatColors.Background)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(24.dp)
+                .padding(start = 24.dp, end = 24.dp, top = 64.dp, bottom = 24.dp)
                 .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
@@ -158,6 +166,12 @@ fun QuizDialog(
                     )
                 }
             }
+        }
+        IconButton(
+            onClick = onClose,
+            modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).size(48.dp)
+        ) {
+            Icon(Icons.Default.Close, contentDescription = stringResource(R.string.close_button_label))
         }
     }
 }

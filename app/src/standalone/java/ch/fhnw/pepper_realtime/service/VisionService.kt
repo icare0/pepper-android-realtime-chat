@@ -434,16 +434,10 @@ class VisionService(context: Context) {
                         val sm = activity.sessionManager
                         if (!sm.isConnected) throw IllegalStateException("Realtime session not connected")
 
-                        if (isGoogleProvider() && isGemini31()) {
-                            // Gemini 3.1: send image now (first frame) AND pass base64
-                            // back so ChatRealtimeHandler can send it again after the
-                            // model's acknowledgment turn (second frame). Two frames
-                            // increase the chance the model processes the image.
-                            Log.d(TAG, "Gemini 3.1: Sending image (1st frame) + deferring for 2nd frame after turn")
-                            sm.sendGoogleImageMessage(base64, "image/jpeg")
+                        if (isGoogleProvider() && supportsImageToolResponse()) {
                             working = false
                             callback.onResult(JSONObject()
-                                .put("status", "deferred_image")
+                                .put("status", "tool_response_image")
                                 .put("base64", base64)
                                 .put("mimeType", "image/jpeg")
                                 .toString())
@@ -515,10 +509,10 @@ class VisionService(context: Context) {
         }
     }
 
-    private fun isGemini31(): Boolean {
+    private fun supportsImageToolResponse(): Boolean {
         return try {
             val activity = activityRef ?: return false
-            RealtimeApiProvider.isGemini31Model(activity.getModel())
+            RealtimeApiProvider.supportsGoogleImageToolResponse(activity.getModel())
         } catch (e: Exception) {
             false
         }
@@ -635,4 +629,3 @@ class VisionService(context: Context) {
         Log.i(TAG, "VisionService shutdown")
     }
 }
-

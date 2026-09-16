@@ -92,6 +92,9 @@ class AudioPlayer {
     // Rate-limit overflow logs (avoid log spam during bursty streams)
     @Volatile
     private var lastOverflowLogMs: Long = 0
+    private val playbackTiming = AudioPlaybackTiming { SystemClock.elapsedRealtime() }
+    private var timingStartFrame = 0
+    private var timingProgressObserved = false
 
     init {
         initializeAudioTrack()
@@ -110,6 +113,9 @@ class AudioPlayer {
      */
     fun addChunk(data: ByteArray?) {
         if (data == null || data.isEmpty()) return
+        playbackTiming.queued()?.let {
+            Log.i("AudioTiming", "audio_queued t_ms=$it")
+        }
 
         // Enforce a predictable byte ceiling for queued audio (avoid unbounded RAM growth).
         // Prefer waiting briefly for the consumer to catch up instead of dropping audio.
@@ -185,7 +191,9 @@ class AudioPlayer {
 
         if (_isPlaying.compareAndSet(false, true)) {
             shouldStop.set(false)
+            val callbackStarted = SystemClock.elapsedRealtime()
             listener?.onPlaybackStarted()
+            Log.i("AudioTiming", "playback_callback_ms=${SystemClock.elapsedRealtime() - callbackStarted}")
 
             val t = Thread({ optimizedPlayLoop() }, "optimized-audio-player")
             t.priority = Thread.NORM_PRIORITY + 2 // Higher priority for audio
@@ -290,6 +298,7 @@ class AudioPlayer {
             memoryPool.release(buffer!!)
         }
         queuedBytes.set(0)
+        playbackTiming.reset()
     }
 
     fun release() {
@@ -302,6 +311,7 @@ class AudioPlayer {
                 track.release()
             }
             audioTrack = null
+            playbackTiming.reset()
             // Clean up memory pool
             memoryPool.cleanup()
         } catch (ignored: Exception) {}
@@ -414,13 +424,18 @@ class AudioPlayer {
         }
 
         try {
+            timingStartFrame = track.playbackHeadPosition
+            timingProgressObserved = false
+            val playStarted = SystemClock.elapsedRealtime()
             track.play()
+            Log.i("AudioTiming", "track_play_ms=${SystemClock.elapsedRealtime() - playStarted}")
             // Larger write granularity reduces overhead and helps absorb bursty streams (e.g., Live API).
             // We still keep carry handling for leftover bytes < frameBytes.
             var frameBytes = frameBytes10ms() * 4 // ~40ms
             if (frameBytes <= 0) frameBytes = 480 // safety for 24kHz mono pcm16
 
             while (!shouldStop.get()) {
+                observePlaybackProgress(track)
                 val data = audioBuffer.poll() // O(1) operation
 
                 if (data != null) {
@@ -464,6 +479,12 @@ class AudioPlayer {
                 // Brief park for audio underflow recovery
                 LockSupport.parkNanos(2_000_000) // 2ms
             } else {
+                if (written > 0) {
+                    playbackTiming.submitted()?.let {
+                        Log.i("AudioTiming", "first_write t_ms=${SystemClock.elapsedRealtime()} queued_to_write_ms=$it")
+                    }
+                    observePlaybackProgress(track)
+                }
                 offset += written
                 totalFramesWritten.addAndGet((written / (bytesPerSample * channels)).toLong())
             }
@@ -554,6 +575,7 @@ class AudioPlayer {
             // Wait for completion callback with timeout
             val startWait = System.nanoTime()
             while (!playbackCompleted.get() && !shouldStop.get()) {
+                if (track != null) observePlaybackProgress(track)
                 LockSupport.parkNanos(2_000_000) // 2ms - just for timeout check
 
                 // Safety timeout
@@ -584,6 +606,15 @@ class AudioPlayer {
         memoryPool.cleanupBetweenResponses()
 
         listener?.onPlaybackFinished()
+    }
+
+    private fun observePlaybackProgress(track: AudioTrack) {
+        if (timingProgressObserved || track.playbackHeadPosition == timingStartFrame) return
+        playbackTiming.progressed()?.let {
+            timingProgressObserved = true
+            // Playback-head progress is a device proxy, not a measurement at the speaker.
+            Log.i("AudioTiming", "playback_head_advanced t_ms=${SystemClock.elapsedRealtime()} queued_to_progress_ms=$it")
+        }
     }
 
     private fun frameBytes10ms(): Int {
@@ -647,4 +678,3 @@ class AudioPlayer {
     }
 
 }
-

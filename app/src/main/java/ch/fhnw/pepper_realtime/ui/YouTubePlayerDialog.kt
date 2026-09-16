@@ -31,6 +31,7 @@ class YouTubePlayerDialog(
     private var dialog: AlertDialog? = null
     private var webView: WebView? = null
     private var audioManager: AudioManager? = null
+    private var closed = false
     private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { }
 
     init {
@@ -78,9 +79,11 @@ class YouTubePlayerDialog(
         // Create dialog
         val builder = AlertDialog.Builder(context)
         builder.setView(dialogView)
-        builder.setCancelable(false) // Force use of close button
+        builder.setCancelable(true)
 
         dialog = builder.create()
+        dialog?.setCanceledOnTouchOutside(false)
+        dialog?.setOnCancelListener { closePlayer() }
         dialog?.show()
 
         // Make dialog full-screen
@@ -216,6 +219,8 @@ class YouTubePlayerDialog(
     }
 
     fun closePlayer() {
+        if (closed) return
+        closed = true
         Log.i("YouTubePlayerDialog", "Closing YouTube player")
 
         // Stop WebView
@@ -231,6 +236,7 @@ class YouTubePlayerDialog(
             wv.clearCache(true)
             wv.destroy()
         }
+        webView = null
 
         // Release audio focus
         try {

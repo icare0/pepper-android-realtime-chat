@@ -38,6 +38,7 @@ class DrawingGameManager @Inject constructor() {
 
     // Callback for sending images to the API
     private var imageSendCallback: ((base64: String, mime: String) -> Boolean)? = null
+    private var closeCallback: (() -> Unit)? = null
 
     // Coroutine management
     private var inactivityJob: Job? = null
@@ -64,7 +65,8 @@ class DrawingGameManager @Inject constructor() {
      * @param topic Optional topic for the drawing (e.g., "Draw an animal")
      * @return true if game started successfully
      */
-    fun startGame(topic: String?): Boolean {
+    fun startGame(topic: String?, onClosed: () -> Unit = {}): Boolean {
+        closeCallback = onClosed
         _state.value = DrawingGameState(
             isVisible = true,
             topic = topic?.takeIf { it.isNotBlank() }
@@ -106,11 +108,19 @@ class DrawingGameManager @Inject constructor() {
     /**
      * Dismiss the drawing game dialog and reset state.
      */
+    fun cancelGame() {
+        val wasVisible = _state.value.isVisible
+        val callback = closeCallback
+        dismissGame()
+        if (wasVisible) callback?.invoke()
+    }
+
     fun dismissGame() {
         inactivityJob?.cancel()
         inactivityJob = null
         recycleBitmap()
         _state.value = DrawingGameState()
+        closeCallback = null
         Log.i(TAG, "Drawing game dismissed")
     }
 

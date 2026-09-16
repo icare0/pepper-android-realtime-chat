@@ -280,7 +280,13 @@ class ChatViewModel @Inject constructor(
         correctAnswer: String,
         onAnswered: (question: String, selectedOption: String) -> Unit
     ) {
-        quizGameManager.showQuiz(question, options, correctAnswer, onAnswered)
+        quizGameManager.showQuiz(question, options, correctAnswer,
+            onCancelled = {
+                sendMessageToRealtimeAPI(
+                    ch.fhnw.pepper_realtime.manager.ActivityCancellation.message("the quiz before selecting an answer"),
+                    requestResponse = true, allowInterrupt = true
+                )
+            }, onAnswered = onAnswered)
     }
 
     fun onQuizAnswerSelected(selectedOption: String) {
@@ -290,6 +296,8 @@ class ChatViewModel @Inject constructor(
     fun dismissQuiz() {
         quizGameManager.dismissQuiz()
     }
+
+    fun cancelQuiz() = quizGameManager.cancelQuiz()
 
     // TicTacToe Game Methods - delegated to TicTacToeGameManager
     fun startTicTacToeGame(onUpdate: (message: String, requestResponse: Boolean) -> Unit): Boolean {
@@ -307,7 +315,7 @@ class ChatViewModel @Inject constructor(
     }
 
     fun dismissTicTacToeGame() {
-        ticTacToeGameManager.dismissGame()
+        ticTacToeGameManager.cancelGame()
     }
 
     // Memory Game Methods - delegated to MemoryGameManager
@@ -320,12 +328,17 @@ class ChatViewModel @Inject constructor(
     }
 
     fun dismissMemoryGame() {
-        memoryGameManager.dismissGame()
+        memoryGameManager.cancelGame()
     }
 
     // Drawing Game Methods - delegated to DrawingGameManager
     fun startDrawingGame(topic: String?): Boolean {
-        return drawingGameManager.startGame(topic)
+        return drawingGameManager.startGame(topic) {
+            sendMessageToRealtimeAPI(
+                ch.fhnw.pepper_realtime.manager.ActivityCancellation.message("the drawing canvas"),
+                requestResponse = true, allowInterrupt = true
+            )
+        }
     }
 
     fun onDrawingChanged(bitmap: android.graphics.Bitmap) {
@@ -337,7 +350,7 @@ class ChatViewModel @Inject constructor(
     }
 
     fun dismissDrawingGame() {
-        drawingGameManager.dismissGame()
+        drawingGameManager.cancelGame()
     }
 
     // Melody Player Methods - delegated to MelodyManager

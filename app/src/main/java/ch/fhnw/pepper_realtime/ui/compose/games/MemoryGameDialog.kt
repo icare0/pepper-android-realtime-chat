@@ -2,6 +2,9 @@ package ch.fhnw.pepper_realtime.ui.compose.games
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.activity.compose.BackHandler
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -40,11 +43,13 @@ private object MemoryColors {
 fun MemoryGameDialog(
     state: MemoryGameInternalState,
     onCardClick: (Int) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
+    BackHandler(onBack = onDismiss)
     // Fullscreen overlay instead of Dialog to preserve immersive mode
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             .background(MemoryColors.Background)
         ) {
@@ -81,7 +86,7 @@ private fun MemoryGameHeader(
         verticalAlignment = Alignment.CenterVertically
     ) {
         // Stats
-        Column {
+        Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = stringResource(R.string.memory_time_label, state.timeString),
                 fontSize = 20.sp,
@@ -100,11 +105,11 @@ private fun MemoryGameHeader(
         }
         
         // Close Button
-        Button(
+        IconButton(
             onClick = onDismiss,
-            colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
+            modifier = Modifier.size(48.dp)
         ) {
-            Text(stringResource(R.string.close_button_label))
+            Icon(Icons.Default.Close, contentDescription = stringResource(R.string.close_button_label), tint = Color.Black)
         }
     }
 }
@@ -206,4 +211,3 @@ private fun MemoryCardView(
         }
     }
 }
-

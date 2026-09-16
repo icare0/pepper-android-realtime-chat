@@ -138,6 +138,16 @@ class MemoryGameManager @Inject constructor() {
     /**
      * Dismiss the game dialog and reset state.
      */
+    fun cancelGame() {
+        val current = _state.value
+        val callback = updateCallback
+        dismissGame()
+        if (current.isVisible && current.isGameActive) {
+            callback?.invoke(ActivityCancellation.message("the Memory game before finishing") +
+                " Progress: ${current.matchedPairs}/${current.totalPairs} pairs, ${current.moves} moves.", true)
+        }
+    }
+
     fun dismissGame() {
         stopTimer()
         autoCloseJob?.cancel()

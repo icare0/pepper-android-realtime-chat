@@ -2,6 +2,7 @@ package ch.fhnw.pepper_realtime.network
 
 import android.util.Base64
 import android.util.Log
+import android.os.SystemClock
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
@@ -73,6 +74,8 @@ class RealtimeEventHandler(val listener: Listener) {
     
     // Track if we've already signaled the first modelTurn in current response
     private var hasSignaledModelTurnStart: Boolean = false
+    private var hasReceivedGoogleAudio = false
+    private var lastGoogleInputTranscriptAt: Long? = null
     
     // Collect Google transcriptions for logging at turn end
     private val googleInputBuffer = StringBuilder()
@@ -293,6 +296,8 @@ class RealtimeEventHandler(val listener: Listener) {
 
             // Handle setupComplete
             if (serverMessage.setupComplete != null) {
+                hasReceivedGoogleAudio = false
+                lastGoogleInputTranscriptAt = null
                 Log.i(TAG, "Google: Setup complete")
                 listener.onGoogleSetupComplete()
                 return
@@ -359,6 +364,7 @@ class RealtimeEventHandler(val listener: Listener) {
      * Handle Google serverContent events (audio, text, transcriptions, interruptions).
      */
     private fun handleGoogleServerContent(content: GoogleLiveEvents.ServerContent) {
+        val receivedAt = SystemClock.elapsedRealtime()
         // Handle interruption (barge-in)
         if (content.interrupted == true) {
             Log.i(TAG, "Google: Interrupted (barge-in)")
@@ -367,6 +373,8 @@ class RealtimeEventHandler(val listener: Listener) {
             googleThinkingBuffer.clear()
             googleOutputBuffer.clear()
             hasSignaledModelTurnStart = false  // Reset for next response
+            hasReceivedGoogleAudio = false
+            lastGoogleInputTranscriptAt = null
             listener.onGoogleInterrupted()
             // Also trigger audio done to stop playback
             listener.onAudioDone()
@@ -375,9 +383,19 @@ class RealtimeEventHandler(val listener: Listener) {
         // Handle input transcription (user speech-to-text) - collect for logging
         content.inputTranscription?.text?.let { transcript ->
             if (transcript.isNotEmpty()) {
+                lastGoogleInputTranscriptAt = receivedAt
                 googleInputBuffer.append(transcript)
                 listener.onUserTranscriptCompleted(null, transcript)
             }
+        }
+
+        if (!hasReceivedGoogleAudio && content.modelTurn?.parts?.any {
+                it.inlineData?.data != null && it.inlineData.mimeType?.startsWith("audio/") == true
+            } == true) {
+            hasReceivedGoogleAudio = true
+            val transcriptGap = lastGoogleInputTranscriptAt?.let { receivedAt - it }
+            // Transcript arrival is not the user's speech-end timestamp.
+            Log.i("AudioTiming", "gemini_first_audio t_ms=$receivedAt since_last_input_transcript_ms=${transcriptGap ?: -1}")
         }
 
         // Handle output transcription (model speech-to-text)
@@ -400,7 +418,6 @@ class RealtimeEventHandler(val listener: Listener) {
             // Handle audio data
             part.inlineData?.let { inlineData ->
                 if (inlineData.data != null && inlineData.mimeType?.startsWith("audio/") == true) {
-                    measureAudioLatency()
                     try {
                         val bytes = Base64.decode(inlineData.data, Base64.DEFAULT)
                         listener.onAudioDelta(bytes, null)
@@ -441,11 +458,12 @@ class RealtimeEventHandler(val listener: Listener) {
             }
             
             hasSignaledModelTurnStart = false  // Reset for next response
+            hasReceivedGoogleAudio = false
+            lastGoogleInputTranscriptAt = null
             listener.onAudioDone()
             // Create a synthetic ResponseDone for compatibility
             listener.onResponseDone(RealtimeEvents.ResponseDone())
         }
     }
 }
-
 

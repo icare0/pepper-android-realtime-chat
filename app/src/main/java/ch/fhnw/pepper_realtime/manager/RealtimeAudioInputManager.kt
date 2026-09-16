@@ -5,6 +5,7 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.util.Base64
 import android.util.Log
+import android.os.SystemClock
 import ch.fhnw.pepper_realtime.network.RealtimeSessionManager
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -166,19 +167,36 @@ class RealtimeAudioInputManager(
     private fun captureLoop() {
         val buffer = ByteArray(currentBufferSizeBytes)
         var consecutiveErrors = 0
+        var reportAt = SystemClock.elapsedRealtime()
+        var maxReadMs = 0L
+        var maxSendMs = 0L
+        var capturedBytes = 0L
 
         Log.d(TAG, "Capture loop started (${if (isGoogleProvider) "Google 16kHz" else "OpenAI 24kHz"})")
 
         while (_isCapturing.get()) {
             try {
                 // Read audio data
+                val readStarted = SystemClock.elapsedRealtime()
                 val bytesRead = audioRecord?.read(buffer, 0, buffer.size) ?: -1
+                maxReadMs = maxOf(maxReadMs, SystemClock.elapsedRealtime() - readStarted)
 
                 when {
                     bytesRead > 0 -> {
                         consecutiveErrors = 0 // Reset error counter on success
                         // Send to Realtime API
+                        val sendStarted = SystemClock.elapsedRealtime()
                         sendAudioChunk(buffer, bytesRead)
+                        maxSendMs = maxOf(maxSendMs, SystemClock.elapsedRealtime() - sendStarted)
+                        capturedBytes += bytesRead
+                        val now = SystemClock.elapsedRealtime()
+                        if (now - reportAt >= 5000) {
+                            Log.i("AudioTiming", "capture window_ms=${now - reportAt} captured_audio_ms=${capturedBytes * 1000 / (currentSampleRate * BYTES_PER_SAMPLE)} max_read_ms=$maxReadMs max_enqueue_ms=$maxSendMs outgoing_queue_bytes=${sessionManager.pendingSendBytes}")
+                            reportAt = now
+                            capturedBytes = 0
+                            maxReadMs = 0
+                            maxSendMs = 0
+                        }
                     }
                     bytesRead == AudioRecord.ERROR_INVALID_OPERATION -> {
                         Log.e(TAG, "AudioRecord not properly initialized")
@@ -282,4 +300,3 @@ class RealtimeAudioInputManager(
         private const val MAX_CONSECUTIVE_ERRORS = 5
     }
 }
-

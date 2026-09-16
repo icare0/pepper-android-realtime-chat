@@ -504,16 +504,20 @@ This allows the Android app to automatically start the face recognition server v
 2. Create an API key
 3. Uses the Gemini Live API with native audio capabilities
 
+The default for new Google configurations is `gemini-3.8-live`. Existing saved model selections are preserved; Gemini 3.1 and older models remain selectable.
+
 **Unique Features:**
 - **Native Audio Model**: End-to-end speech model (audio in, audio out) without separate STT/TTS
 - **Automatic Voice Activity Detection**: Configurable start/end sensitivity, prefix padding, and silence duration
-- **Thinking Budget**: Optional chain-of-thought reasoning with configurable token budget
-- **Show Thinking**: Display AI thinking traces in chat bubbles (requires Thinking Budget > 0)
+- **Incremental Context Updates**: Gemini 3.8 Live receives silent updates via `clientContent` with `turnComplete=false`. In Memory, card reveals and mismatches update context without requesting speech; matching pairs and game completion request a response. Gemini 3.1 still skips silent text updates because its realtime text input always triggers a response.
+- **Vision Tool Responses**: On Gemini 3.1 and 3.8 Live, `analyze_vision` returns the captured image directly in `toolResponse.functionResponses[].parts[].inlineData`, alongside the matching tool call ID. No duplicate image frames or extra acknowledgment turn are needed. Older Gemini models retain the separate image-message path. See the [Live API tool response reference](https://ai.google.dev/api/live#bidigeneratecontenttoolresponse).
+- **Thinking Settings**: Gemini 3.1 offers a thinking level; older models offer a thinking budget. Gemini 3.8 Live has no configurable thinking level or budget.
+- **Show Thinking**: Display available AI thinking traces for the older models
 - **Google Search Grounding**: Real-time web search for improved accuracy and reduced hallucinations
-- **Proactive Audio**: Allows Gemini to proactively decide not to respond when content is not relevant
+- **Proactive Audio**: Allows Gemini to proactively decide not to respond when content is not relevant (not supported by Gemini 3.1)
 - **Live Video Streaming**: Continuous 1 FPS video stream to Gemini for real-time visual context during conversations. **Recommended for vision tasks** - the video stream provides more reliable visual understanding than static image analysis, as Gemini Live is optimized for continuous video input.
 - **30 Distinct Voices**: Extensive selection including Puck, Charon, Kore, Fenrir, Aoede, and many more
-- **Note**: Uses `v1alpha` API version with `gemini-2.5-flash-native-audio-preview` model
+- **Note**: Uses the `v1alpha` WebSocket API. See Google's [Live API capabilities](https://ai.google.dev/gemini-api/docs/live-api/capabilities) for incremental updates and model differences.
 
 ### Optional APIs (Extended Features)
 
@@ -833,6 +837,8 @@ Certain events automatically interrupt ongoing responses to provide immediate fe
 - **Touch Events** - Physical touch triggers new contextual response
 - **Navigation Updates** - Status messages like "[MAP LOADED]" or "[NAVIGATION ERROR]"
 - **Game Events** - Memory game matches, quiz answers, TicTacToe moves
+- **Early Activity Exit** - Close Quiz, Memory, TicTacToe, the drawing canvas or YouTube using the close control or Android Back. Closing an unfinished game or the drawing canvas sends context to the model and requests a spoken follow-up. Completed games and answered quizzes retain their normal completion flow. Closing YouTube restores the microphone and requests a follow-up; it is not reported as an automatically detected video end.
+- **Visible Close Controls** - Quiz and Memory have an X button in the upper-right corner below the app bar. Exit events explicitly identify the user as the person who closed the activity, and duplicate close notifications are suppressed.
 - **Event Rules** - Rules configured with "Interrupt & Respond" action type
 
 ### Technical Features
@@ -1730,7 +1736,12 @@ adb logcat | grep -E "(MovementController|ToolExecutor.*navigate|ToolRegistry.*l
 
 # View mapping logs
 adb logcat | grep -E "(LocalizeAndMap|mapping|create_environment_map)"
+
+# View audio timing diagnostics without conversation content
+adb logcat -v time -s AudioTiming:I "*:S"
 ```
+
+`AudioTiming` records capture throughput, outgoing queue size, first Gemini audio receipt, and local playback stages. These measurements do not change audio buffering or routing. The interval since the last input transcript is not a speech-end latency measurement; Android playback-head progress also does not measure the actual onset of sound from Pepper's head speakers.
 
 ## 🤝 Contributing
 

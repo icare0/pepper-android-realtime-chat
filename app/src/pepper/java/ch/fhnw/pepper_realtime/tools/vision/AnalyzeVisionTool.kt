@@ -131,9 +131,10 @@ class AnalyzeVisionTool : Tool {
                 try {
                     val resultJson = JSONObject(finalResult)
                     val status = resultJson.optString("status")
-                    if (status == "deferred_image") {
-                        // Gemini 3.1: pass through with base64 intact for ChatRealtimeHandler
-                        finalResult = resultJson.toString()
+                    if (status == "tool_response_image") {
+                        val contextMessage = context.appContext.getString(R.string.vision_context_suffix)
+                        finalResult = resultJson.put("description",
+                            "Analyze the attached photo.$contextMessage").toString()
                     } else if (status == "sent_to_realtime") {
                         val contextMessage = context.appContext.getString(R.string.vision_context_suffix)
                         finalResult = JSONObject()
@@ -157,5 +158,4 @@ class AnalyzeVisionTool : Tool {
     }
 
 }
-
 

@@ -308,9 +308,11 @@ fun MainScreen(
                 // Quiz
                 if (quizState.isVisible) {
                     QuizDialog(
+                        modifier = Modifier.padding(innerPadding),
                         question = quizState.question,
                         options = quizState.options,
                         correctAnswer = quizState.correctAnswer,
+                        onClose = { viewModel.cancelQuiz() },
                         onAnswered = { selectedOption ->
                             viewModel.onQuizAnswerSelected(selectedOption)
                         },
@@ -332,6 +334,7 @@ fun MainScreen(
                 // Memory
                 if (memoryState.isVisible) {
                     MemoryGameDialog(
+                        modifier = Modifier.padding(innerPadding),
                         state = memoryState,
                         onCardClick = { id -> viewModel.onMemoryCardClick(id) },
                         onDismiss = { viewModel.dismissMemoryGame() }
