@@ -282,8 +282,10 @@ YOUTUBE_API_KEY=your_youtube_api_key
 
 **🤖 Pepper Flavor (Default)**
 ```bash
-./gradlew assemblePepperDebug
+./gradlew assemblePepperRelease
 ```
+
+Use **Release** for normal use and performance testing on Pepper's older tablet. This is the non-debuggable variant used on the robot; `minifyEnabled` is currently `false`, so it is not an R8-shrunk/optimized build. The command produces an **unsigned** APK that must be signed before installation (see Step 4 below). On Windows PowerShell, use `.\gradlew.bat` instead of `./gradlew`.
 
 **📱 Standalone Flavor**
 ```bash
@@ -292,7 +294,8 @@ YOUTUBE_API_KEY=your_youtube_api_key
 
 **In Android Studio:**
 - Select build flavor from: `Build` → `Select Build Variant`
-- Choose `pepperDebug` for Pepper robot
+- Choose `pepperRelease` for normal Pepper use (requires APK signing)
+- Choose `pepperDebug` only for development/debugging on Pepper
 - Choose `standaloneDebug` for testing on any device
 
 ### 4. Open in Android Studio
@@ -337,7 +340,32 @@ YOUTUBE_API_KEY=your_youtube_api_key
 - **Device not listed**: Ensure same WiFi network, check IP address, restart ADB server (`adb kill-server && adb start-server`)
 - **"Unauthorized"**: Accept the USB debugging popup on Pepper's tablet
 
-#### Step 4: Deploy from Android Studio
+#### Step 4: Install the Release APK (Recommended)
+
+The following PowerShell commands reproduce the local release installation used on Pepper. Run them from the project root after connecting with ADB. They use Android SDK Build Tools `35.0.1`; adjust the SDK path/version if yours differs.
+
+```powershell
+# Build the non-debuggable Pepper release APK
+.\gradlew.bat assemblePepperRelease
+
+# Sign with the existing local debug certificate to update a debug-signed install
+$apksigner = "$env:LOCALAPPDATA\Android\Sdk\build-tools\35.0.1\apksigner.bat"
+& $apksigner sign --ks "$env:USERPROFILE\.android\debug.keystore" --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android --out app/build/outputs/apk/pepper/release/app-pepper-release-local.apk app/build/outputs/apk/pepper/release/app-pepper-release-unsigned.apk
+& $apksigner verify app/build/outputs/apk/pepper/release/app-pepper-release-local.apk
+
+# Install only after the build, signing and verification succeed
+adb install -r app/build/outputs/apk/pepper/release/app-pepper-release-local.apk
+```
+
+Signing with a debug certificate does **not** turn the release build into a debug build. This certificate is for local testing only, not public distribution. The existing `debug.keystore` must be present and must match the certificate used for the installed app. For distribution, use your own protected release keystore or Android Studio's **Build > Generate Signed Bundle / APK** with the `pepperRelease` variant.
+
+`adb install -r` keeps app data and settings when the package and signing certificate match. If Android reports `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, use the original signing key rather than uninstalling the app and losing its data. With multiple devices connected, add `-s <PEPPER_IP>:5555` after `adb`. Each rebuild may remove the locally signed APK; sign the new unsigned output again before installing.
+
+**Optional Windows build workaround:** If Gradle fails with `Unable to establish loopback connection` due to Java Unix-domain sockets, set `$env:JAVA_TOOL_OPTIONS = '-Djdk.net.unixdomain.tmpdir=C:/nonexistent-codex-socket-dir'` in the build terminal and retry. Use a path that does not exist; this enables the TCP fallback used for our local build. This is not needed for normal builds.
+
+#### Alternative: Deploy a Debug Build from Android Studio
+For development only; select `pepperDebug` first. Use the signed release instructions above for normal use and performance comparisons.
+
 1. In Android Studio's toolbar, verify that **"ARTNCORE LPT_200AR"** appears in the device dropdown
 2. Click the green **Run button** (▶️) in the toolbar
 3. Android Studio will build and install the app on Pepper
@@ -345,9 +373,9 @@ YOUTUBE_API_KEY=your_youtube_api_key
 
 **Note:** The ADB connection persists between sessions. You only need to reconnect if Pepper reboots or changes IP address.
 
-**Alternative: Manual APK Installation**
+**Alternative: Manual Debug APK Installation (Development Only)**
 ```bash
-# Build the Pepper APK
+# Build the Pepper debug APK
 ./gradlew assemblePepperDebug
 
 # Install via ADB (APK path: app/build/outputs/apk/pepper/debug/app-pepper-debug.apk)
@@ -1520,7 +1548,7 @@ This approach provides natural-looking robot behavior even when using external a
 # Debug build
 ./gradlew assembleDebug
 
-# Release build
+# Release build (unsigned; sign before installing, see Pepper deployment above)
 ./gradlew assembleRelease
 
 # Run tests
