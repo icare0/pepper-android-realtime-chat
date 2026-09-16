@@ -155,8 +155,8 @@ A multimodal AI system for the Pepper robot powered by advanced speech-to-speech
 - **Real-time Voice Chat** - Natural conversations powered by speech-to-speech (S2S) AI models:
   - **OpenAI** - gpt-realtime-2.1, gpt-realtime-2.1-mini, gpt-realtime-2 (GPT-5-class reasoning models with configurable effort levels), gpt-realtime-1.5, gpt-realtime, gpt-realtime-mini, gpt-4o-realtime-preview, gpt-4o-mini-realtime-preview
   - **Azure OpenAI** - Same models with network-level isolation and customer-managed encryption for enterprise compliance
-  - **x.ai** - `grok-voice-think-fast-2.0` (default), `grok-voice-think-fast-1.0`, and `grok-voice-fast-1.0` Voice Agent API with native web/X search
-  - **Google** - Gemini Live API with native audio model and 30 voices
+  - **x.ai** - grok-voice-think-fast-2.0 (default), grok-voice-think-fast-1.0, grok-voice-fast-1.0 via the Voice Agent API with native web/X search
+  - **Google** - gemini-3.8-live (default for new configurations), gemini-3.1-flash-live-preview, gemini-2.5-flash-native-audio-preview-12-2025, gemini-2.0-flash-live-001 via the Gemini Live API with native audio and 30 voices
 - **Audio Input Modes** - Two optimized modes for voice capture:
   - **Direct Audio** - Low-latency streaming with native voice activity detection
   - **Azure Speech STT** - Speech is first transcribed to text via Azure Speech Services; performs better for regional dialects (e.g., Swiss German) and provides confidence scores that inform the AI when transcription quality may be uncertain
