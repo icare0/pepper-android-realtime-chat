@@ -101,6 +101,13 @@ CAMERA_DAEMON_PORT = 5050
 CAMERA_DAEMON_URL = f'http://{CAMERA_DAEMON_HOST}:{CAMERA_DAEMON_PORT}'
 CAMERA_DAEMON_AVAILABLE = False
 HTTP_CONNECTION = None  # Persistent connection
+LAST_FRAME_UNCHANGED = False  # True when the last SHM read had no new frame
+
+# Tracking loop logging / broadcast tuning
+TIMING_LOG_EVERY = 100
+TIMING_LOG_COUNTER = 0
+BROADCAST_VOLATILE_FIELDS = ('time_since_seen_ms', 'track_age_ms', 'gaze_duration_ms', 'last_seen_ms', 'bbox')
+BROADCAST_KEEPALIVE_S = 1.0
 
 # Fallback to subprocess if daemon not available
 SENSOR_SCRIPT = '/home/nao/face_data/get_sensors.py'
@@ -411,10 +418,12 @@ def get_synchronized_frame():
     Tries Shared Memory first (Zero-Copy), falls back to HTTP.
     """
     # 1. Try Shared Memory
+    global LAST_FRAME_UNCHANGED
     reader = get_shm_reader()
     frame = reader.read()
-    
-    if frame == "NO_NEW_FRAME":
+    LAST_FRAME_UNCHANGED = frame == "NO_NEW_FRAME"
+
+    if LAST_FRAME_UNCHANGED:
         # Frame hasn't changed since last read
         # In tracking loop, we might want to wait or return None
         # But to match old behavior, we return None so loop waits
@@ -652,8 +661,8 @@ def update_tracking_once():
     
     Returns (people_list, update_time_ms).
     """
-    global LAST_SENSOR_DATA
-    
+    global LAST_SENSOR_DATA, TIMING_LOG_COUNTER
+
     start_time = time.time()
     
     with TRACKER_LOCK:
@@ -671,6 +680,11 @@ def update_tracking_once():
             t0 = time.time()
             frame = get_synchronized_frame()
             t_frame = (time.time() - t0) * 1000
+            if frame is None and LAST_FRAME_UNCHANGED:
+                # Daemon is alive but has no new frame yet: keep the current tracks. Falling
+                # through to the subprocess capture below spawns python2 and re-subscribes the
+                # camera (~1-2 s of Atom CPU) on every cycle the daemon is slower than the loop.
+                return TRACKER.to_dict(), 0
             if frame and frame.get('rgb_image') is not None:
                 image = frame['rgb_image']
                 head_yaw = frame.get('head_yaw', 0.0)
@@ -785,9 +799,12 @@ def update_tracking_once():
         t_recog = (time.time() - t3) * 1000
         
         update_time = int((time.time() - start_time) * 1000)
-        
-        # DEBUG: Always log timing with resize breakdown
-        print(f"[Timing] frame={t_frame:.0f}ms, resize={t_resize:.0f}ms, detect={t_detect:.0f}ms, track={t_track:.0f}ms, recog={t_recog:.0f}ms, total={update_time}ms")
+
+        # Log timing only every TIMING_LOG_EVERY cycles: at 10 Hz an unconditional print
+        # filled server.log on the head's flash (~860k lines/day)
+        TIMING_LOG_COUNTER += 1
+        if TIMING_LOG_COUNTER % TIMING_LOG_EVERY == 0:
+            print(f"[Timing] frame={t_frame:.0f}ms, resize={t_resize:.0f}ms, detect={t_detect:.0f}ms, track={t_track:.0f}ms, recog={t_recog:.0f}ms, total={update_time}ms")
         
         return TRACKER.to_dict(), update_time
 
@@ -801,17 +818,25 @@ def background_tracking_loop():
     
     print("[Tracking] Background thread started")
     last_broadcast = None
-    
+    last_broadcast_time = 0.0
+
     while TRACKING_RUNNING:
         try:
             people, update_ms = update_tracking_once()
             CACHED_PEOPLE = people
             LAST_UPDATE_MS = update_ms
-            
-            # Broadcast to WebSocket clients if data changed
+
+            # Broadcast to WebSocket clients if data changed. Time-based fields
+            # (time_since_seen_ms, track_age_ms, ...) change on every cycle, so they are
+            # excluded from the comparison; a keep-alive refreshes them every second.
             if WEBSOCKET_AVAILABLE and get_client_count() > 0:
-                current_state = json.dumps(people)
-                if current_state != last_broadcast:
+                current_state = json.dumps(
+                    [{k: v for k, v in p.items() if k not in BROADCAST_VOLATILE_FIELDS} for p in people],
+                    sort_keys=True
+                )
+                now = time.time()
+                if current_state != last_broadcast or now - last_broadcast_time >= BROADCAST_KEEPALIVE_S:
+                    last_broadcast_time = now
                     schedule_broadcast({
                         'people': people,
                         'head_angles': {

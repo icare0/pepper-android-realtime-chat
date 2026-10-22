@@ -30,8 +30,14 @@ class DashboardManager @Inject constructor() {
         onDashboardOpened = callback
     }
 
+    // Latest perception snapshot, kept while the dashboard is hidden. Perception updates arrive
+    // at up to 10 Hz and the dashboard state is collected by MainScreen, so emitting them while
+    // hidden recomposed the whole screen continuously on Pepper's tablet.
+    @Volatile private var latestHumans: List<PerceptionData.HumanInfo> = emptyList()
+    @Volatile private var latestUpdate: String = ""
+
     fun showDashboard() {
-        _state.update { it.copy(isVisible = true, isMonitoring = true) }
+        _state.update { it.copy(isVisible = true, isMonitoring = true, humans = latestHumans, lastUpdate = latestUpdate) }
         onDashboardOpened?.invoke()
     }
 
@@ -40,18 +46,19 @@ class DashboardManager @Inject constructor() {
     }
 
     fun toggleDashboard() {
-        val willBeVisible = !_state.value.isVisible
-        _state.update { it.copy(isVisible = willBeVisible, isMonitoring = willBeVisible) }
-        if (willBeVisible) {
-            onDashboardOpened?.invoke()
-        }
+        if (_state.value.isVisible) hideDashboard() else showDashboard()
     }
 
     fun updateDashboardHumans(humans: List<PerceptionData.HumanInfo>, timestamp: String) {
+        latestHumans = humans
+        latestUpdate = timestamp
+        if (!_state.value.isVisible) return
         _state.update { it.copy(humans = humans, lastUpdate = timestamp) }
     }
 
     fun resetDashboard() {
+        latestHumans = emptyList()
+        latestUpdate = ""
         _state.value = DashboardState()
     }
 }

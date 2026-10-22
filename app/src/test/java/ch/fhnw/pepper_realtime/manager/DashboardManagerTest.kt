@@ -126,6 +126,8 @@ class DashboardManagerTest {
         val humans = listOf(human)
         val timestamp = "12:34:56"
 
+        manager.showDashboard()
+
         // Act
         manager.updateDashboardHumans(humans, timestamp)
 
@@ -133,6 +135,27 @@ class DashboardManagerTest {
         assertEquals(1, manager.state.value.humans.size)
         assertEquals("John", manager.state.value.humans[0].recognizedName)
         assertEquals(timestamp, manager.state.value.lastUpdate)
+    }
+
+    @Test
+    fun `updateDashboardHumans while hidden does not emit but is shown on open`() {
+        // Arrange
+        val human = PerceptionData.HumanInfo().apply { trackId = 7 }
+        val stateBefore = manager.state.value
+
+        // Act
+        manager.updateDashboardHumans(listOf(human), "10:00:00")
+
+        // Assert - hidden dashboard state is untouched (no recomposition)
+        assertTrue(manager.state.value === stateBefore)
+
+        // Act - opening the dashboard shows the latest snapshot
+        manager.showDashboard()
+
+        // Assert
+        assertEquals(1, manager.state.value.humans.size)
+        assertEquals(7, manager.state.value.humans[0].trackId)
+        assertEquals("10:00:00", manager.state.value.lastUpdate)
     }
 
     @Test

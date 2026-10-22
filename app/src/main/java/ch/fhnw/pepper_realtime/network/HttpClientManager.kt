@@ -74,6 +74,9 @@ class HttpClientManager @Inject constructor() {
             .readTimeout(0, TimeUnit.SECONDS)        // No read timeout for persistent connection
             .writeTimeout(10, TimeUnit.SECONDS)
             .pingInterval(30, TimeUnit.SECONDS)      // Keep-alive for WebSocket
+            // Don't deflate outgoing messages: base64 PCM barely compresses and deflating
+            // ~10 audio messages/s costs CPU on Pepper's tablet
+            .minWebSocketMessageToCompress(Long.MAX_VALUE)
             .build()
 
         // API client - optimized for HTTP API calls (Vision, Tools)

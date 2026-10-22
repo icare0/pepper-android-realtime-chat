@@ -7,7 +7,6 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -22,6 +21,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
@@ -114,17 +114,22 @@ fun VideoButton(
         label = "video_border_color"
     )
 
-    // Pulsing animation for active streaming state
-    val infiniteTransition = rememberInfiniteTransition(label = "video_pulse")
-    val pulseAlpha by infiniteTransition.animateFloat(
-        initialValue = 1f,
-        targetValue = 0.6f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(800, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "video_pulse_alpha"
-    )
+    // Pulsing animation, only while streaming: an always-running infinite transition requests
+    // a frame every vsync even when nothing pulses. The alpha is read in drawBehind so the
+    // pulse only redraws instead of recomposing the button.
+    val pulseAlpha = if (visualState == VideoVisualState.ACTIVE) {
+        rememberInfiniteTransition(label = "video_pulse").animateFloat(
+            initialValue = 1f,
+            targetValue = 0.6f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(800, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "video_pulse_alpha"
+        )
+    } else {
+        null
+    }
 
     val icon = if (isStreaming) Icons.Default.Videocam else Icons.Default.VideocamOff
 
@@ -139,12 +144,9 @@ fun VideoButton(
             .size(60.dp) // Match MicrophoneButton size
             .shadow(8.dp, CircleShape)
             .clip(CircleShape)
-            .background(
-                if (visualState == VideoVisualState.ACTIVE)
-                    backgroundColor.copy(alpha = pulseAlpha)
-                else
-                    backgroundColor
-            )
+            .drawBehind {
+                drawRect(backgroundColor.copy(alpha = pulseAlpha?.value ?: backgroundColor.alpha))
+            }
             .border(2.dp, borderColor, CircleShape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center

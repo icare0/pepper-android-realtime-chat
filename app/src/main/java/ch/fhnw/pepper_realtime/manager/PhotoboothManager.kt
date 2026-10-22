@@ -129,7 +129,6 @@ class PhotoboothManager @Inject constructor(
                         } else null
 
                         withContext(Dispatchers.Main) {
-                            recycleCurrentBitmaps()
                             _state.update {
                                 it.copy(
                                     phase = PhotoboothPhase.RESULT,
@@ -175,14 +174,8 @@ class PhotoboothManager @Inject constructor(
         activeJob?.cancel()
         activeJob = null
         photoboothServer.stop()
-        recycleCurrentBitmaps()
+        // Displayed bitmaps are not recycled manually: Compose may still draw them during the
+        // overlay exit, and on API 23 the GC reclaims bitmap memory once they are unreferenced.
         _state.value = PhotoboothUiState(isVisible = false, phase = PhotoboothPhase.IDLE)
-    }
-
-    private fun recycleCurrentBitmaps() {
-        val oldPhoto = _state.value.photoBitmap
-        val oldQr = _state.value.qrBitmap
-        oldPhoto?.recycle()
-        oldQr?.recycle()
     }
 }

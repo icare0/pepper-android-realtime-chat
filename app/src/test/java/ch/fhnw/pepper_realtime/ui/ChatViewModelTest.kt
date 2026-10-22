@@ -149,8 +149,25 @@ class ChatViewModelTest {
         viewModel.addMessage(ChatMessage("Hello", ChatMessage.Sender.ROBOT))
 
         viewModel.appendToLastRobotMessage(" World")
+        viewModel.flushPendingRobotText()
 
         assertEquals("Hello World", viewModel.messageList.value[0].message)
+    }
+
+    @Test
+    fun `robot deltas are buffered then flushed before the next message`() {
+        viewModel.addMessage(ChatMessage("Hello", ChatMessage.Sender.ROBOT))
+
+        viewModel.appendToLastRobotMessage(" big")
+        viewModel.appendToLastRobotMessage(" world")
+        // Buffered: not published yet
+        assertEquals("Hello", viewModel.messageList.value[0].message)
+
+        // Adding another message flushes the buffer first, so ordering is preserved
+        viewModel.addMessage(ChatMessage("Next", ChatMessage.Sender.USER))
+
+        assertEquals("Hello big world", viewModel.messageList.value[0].message)
+        assertEquals("Next", viewModel.messageList.value[1].message)
     }
 
     @Test
@@ -158,6 +175,7 @@ class ChatViewModelTest {
         viewModel.addMessage(ChatMessage("User message", ChatMessage.Sender.USER))
 
         viewModel.appendToLastRobotMessage(" appended")
+        viewModel.flushPendingRobotText()
 
         // Should not modify user messages
         assertEquals("User message", viewModel.messageList.value[0].message)

@@ -193,14 +193,16 @@ class AudioPlayer {
 
         if (_isPlaying.compareAndSet(false, true)) {
             shouldStop.set(false)
-            val callbackStarted = SystemClock.elapsedRealtime()
-            listener?.onPlaybackStarted()
-            Log.i("AudioTiming", "playback_callback_ms=${SystemClock.elapsedRealtime() - callbackStarted}")
-
+            // Start the audio thread first so turn-state/gesture work in the callback
+            // does not delay the first audible sample
             val t = Thread({ optimizedPlayLoop() }, "optimized-audio-player")
             t.priority = Thread.NORM_PRIORITY + 2 // Higher priority for audio
             playThread = t
             t.start()
+
+            val callbackStarted = SystemClock.elapsedRealtime()
+            listener?.onPlaybackStarted()
+            Log.i("AudioTiming", "playback_callback_ms=${SystemClock.elapsedRealtime() - callbackStarted}")
         }
     }
 
@@ -431,6 +433,11 @@ class AudioPlayer {
             val playStarted = SystemClock.elapsedRealtime()
             track.play()
             Log.i("AudioTiming", "track_play_ms=${SystemClock.elapsedRealtime() - playStarted}")
+            // Re-baseline here: stop() resets the head to 0, so a baseline captured in
+            // onResponseBoundary() while the previous response was still draining is stale,
+            // the drain marker is never reached and every reply ended on the 1.5 s timeout.
+            responseStartFrames = track.playbackHeadPosition
+            totalFramesWritten.set(0)
             // Larger write granularity reduces overhead and helps absorb bursty streams (e.g., Live API).
             // We still keep carry handling for leftover bytes < frameBytes.
             var frameBytes = frameBytes10ms() * 4 // ~40ms

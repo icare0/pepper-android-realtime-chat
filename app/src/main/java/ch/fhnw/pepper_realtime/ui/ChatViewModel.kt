@@ -30,6 +30,7 @@ import ch.fhnw.pepper_realtime.data.RuleActionType
 import ch.fhnw.pepper_realtime.ui.compose.dashboard.FaceManagementState
 import ch.fhnw.pepper_realtime.ui.compose.dashboard.PerceptionSettingsState
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import ch.fhnw.pepper_realtime.network.WebSocketConnectionCallback
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -58,6 +59,7 @@ class ChatViewModel @Inject constructor(
 
     companion object {
         private const val TAG = "ChatViewModel"
+        private const val TRANSCRIPT_FLUSH_MS = 120L
     }
 
     // State for partial speech results (streaming STT)
@@ -416,21 +418,22 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    // Message Management - using StateFlow.update for atomic operations
-    fun addMessage(message: ChatMessage) {
-        _messageList.update { current -> current + message }
-    }
-
-    fun addImageMessage(imagePath: String) {
-        // Image is captured by robot camera, so it's a ROBOT output (displayed on the left with thumbnail)
-        addMessage(ChatMessage("", imagePath, ChatMessage.Sender.ROBOT))
-    }
+    // Robot transcript deltas arrive 10-50 times per second. Publishing each one copied the
+    // message list and recomposed the chat, which is costly on Pepper's tablet, so they are
+    // buffered here and published at most every TRANSCRIPT_FLUSH_MS. Every other mutation of
+    // _messageList flushes first to keep message ordering intact.
+    private val pendingRobotText = StringBuilder()
+    private var robotFlushScheduled = false // guarded by pendingRobotText
 
     /**
-     * Append text to the last ROBOT regular message bubble.
-     * This prevents mixing user and assistant text in the same bubble.
+     * Publish buffered robot transcript text to the last ROBOT bubble.
      */
-    fun appendToLastRobotMessage(text: String) {
+    fun flushPendingRobotText() {
+        val text = synchronized(pendingRobotText) {
+            robotFlushScheduled = false
+            if (pendingRobotText.isEmpty()) return
+            pendingRobotText.toString().also { pendingRobotText.setLength(0) }
+        }
         _messageList.update { current ->
             if (current.isEmpty()) return@update current
 
@@ -449,10 +452,39 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    // Message Management - using StateFlow.update for atomic operations
+    fun addMessage(message: ChatMessage) {
+        flushPendingRobotText()
+        _messageList.update { current -> current + message }
+    }
+
+    fun addImageMessage(imagePath: String) {
+        // Image is captured by robot camera, so it's a ROBOT output (displayed on the left with thumbnail)
+        addMessage(ChatMessage("", imagePath, ChatMessage.Sender.ROBOT))
+    }
+
+    /**
+     * Append text to the last ROBOT regular message bubble.
+     * This prevents mixing user and assistant text in the same bubble.
+     */
+    fun appendToLastRobotMessage(text: String) {
+        if (text.isEmpty()) return
+        synchronized(pendingRobotText) {
+            pendingRobotText.append(text)
+            if (robotFlushScheduled) return
+            robotFlushScheduled = true
+        }
+        viewModelScope.launch {
+            delay(TRANSCRIPT_FLUSH_MS)
+            flushPendingRobotText()
+        }
+    }
+
     /**
      * Append text to the last USER regular message bubble.
      */
     fun appendToLastUserMessage(text: String) {
+        flushPendingRobotText()
         _messageList.update { current ->
             if (current.isEmpty()) return@update current
 
@@ -482,6 +514,7 @@ class ChatViewModel @Inject constructor(
      * Append text to the last THINKING message bubble (Google Live API thinking traces).
      */
     fun appendToThinkingMessage(text: String) {
+        flushPendingRobotText()
         _messageList.update { current ->
             if (current.isEmpty()) return@update current
 
@@ -499,6 +532,7 @@ class ChatViewModel @Inject constructor(
     }
 
     fun updateLastRobotMessage(newText: String) {
+        flushPendingRobotText()
         _messageList.update { current ->
             if (current.isEmpty()) return@update current
 
@@ -523,6 +557,7 @@ class ChatViewModel @Inject constructor(
             return false
         }
 
+        flushPendingRobotText()
         var found = false
         _messageList.update { current ->
             val index = current.indexOfFirst { it.itemId == itemId }
@@ -541,6 +576,7 @@ class ChatViewModel @Inject constructor(
     }
 
     fun clearMessages() {
+        synchronized(pendingRobotText) { pendingRobotText.setLength(0) }
         _messageList.value = emptyList()
         // Clear cached item ID to prevent truncate errors on non-existent items
         lastAssistantItemId = null
@@ -567,6 +603,7 @@ class ChatViewModel @Inject constructor(
     fun handleUserTranscriptCompleted(itemId: String, transcript: String) {
         val placeholder = pendingUserTranscripts.remove(itemId)
         if (placeholder != null) {
+            flushPendingRobotText()
             _messageList.update { current ->
                 val index = current.indexOf(placeholder)
                 if (index != -1) {
@@ -602,6 +639,7 @@ class ChatViewModel @Inject constructor(
     }
 
     fun updateLatestFunctionCallResult(result: String) {
+        flushPendingRobotText()
         _messageList.update { current ->
             val index = current.indexOfLast { message ->
                 message.type == ChatMessage.Type.FUNCTION_CALL && message.functionResult == null

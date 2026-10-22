@@ -184,16 +184,21 @@ class PollingThread(threading.Thread):
                 
                 # Ensure frame data and RGB image are valid before updating
                 if frame_data and frame_data.get('rgb'):
+                    prev = self.last_frame
+                    same_frame = (prev is not None and prev.get('rgb') is not None and
+                                  prev['rgb'].get('timestamp') == frame_data['rgb'].get('timestamp'))
                     self.last_frame = frame_data
-                    
-                    # Push to Shared Memory
-                    shm_manager.write(
-                        frame_data['head'],
-                        frame_data['rgb']
-                    )
-                
-                # Sleep ~30ms (~33Hz polling) to comfortably capture 15 FPS without CPU hogging
-                time.sleep(0.03)
+
+                    # Push to Shared Memory, skipping duplicates of the previous camera frame
+                    # (copying ~920 KB of VGA BGR for nothing)
+                    if not same_frame:
+                        shm_manager.write(
+                            frame_data['head'],
+                            frame_data['rgb']
+                        )
+
+                # Poll at the camera frame rate: polling faster only fetches duplicate frames
+                time.sleep(1.0 / RGB_FPS)
                 
             except Exception as e:
                 # Cleanly handle dropped frames or transient capture errors without crashing

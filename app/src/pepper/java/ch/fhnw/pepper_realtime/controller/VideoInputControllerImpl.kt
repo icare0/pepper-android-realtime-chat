@@ -145,12 +145,9 @@ class VideoInputControllerImpl @Inject constructor(
                 bitmap.recycle()
             }
 
-            // Update preview frame and safely recycle previous frame
-            val oldFrame = _currentFrame.value
+            // Update preview frame. The previous frame is not recycled manually: Compose may still
+            // be drawing it ("recycled bitmap" crash), and on API 23 the GC reclaims bitmap memory.
             _currentFrame.value = optimizedBitmap
-            if (oldFrame != null && oldFrame != optimizedBitmap && !oldFrame.isRecycled) {
-                oldFrame.recycle()
-            }
 
             // Compress to JPEG
             val jpegBytes: ByteArray
