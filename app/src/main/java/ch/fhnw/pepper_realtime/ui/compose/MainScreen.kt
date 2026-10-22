@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddAPhoto
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Close
@@ -29,6 +30,7 @@ import coil.compose.AsyncImage
 import ch.fhnw.pepper_realtime.R
 import ch.fhnw.pepper_realtime.manager.ApiKeyManager
 import ch.fhnw.pepper_realtime.ui.ChatViewModel
+import ch.fhnw.pepper_realtime.ui.compose.entertainment.PhotoboothDialog
 import ch.fhnw.pepper_realtime.ui.compose.games.DrawingCanvasDialog
 import ch.fhnw.pepper_realtime.ui.compose.games.MemoryGameDialog
 import ch.fhnw.pepper_realtime.ui.compose.games.MelodyPlayerDialog
@@ -74,6 +76,7 @@ fun MainScreen(
     val faceManagementState by viewModel.faceManagementState.collectAsStateWithLifecycle()
     val eventRulesState by viewModel.eventRulesState.collectAsStateWithLifecycle()
     val perceptionSettingsState by viewModel.perceptionSettingsState.collectAsStateWithLifecycle()
+    val photoboothState by viewModel.photoboothState.collectAsStateWithLifecycle()
     val isVideoStreamActive by viewModel.isVideoStreamActive.collectAsStateWithLifecycle()
     val videoPreviewFrame by viewModel.videoPreviewFrame.collectAsStateWithLifecycle()
     val settingsState by settingsViewModel.settingsState.collectAsStateWithLifecycle()
@@ -160,6 +163,14 @@ fun MainScreen(
                                 Icons.Default.Face,
                                 contentDescription = stringResource(R.string.content_desc_perception_dashboard),
                                 modifier = Modifier.size(32.dp)
+                            )
+                        }
+                        IconButton(onClick = { viewModel.startPhotobooth() }) {
+                            Icon(
+                                Icons.Default.AddAPhoto,
+                                contentDescription = stringResource(R.string.photobooth_content_desc),
+                                modifier = Modifier.size(32.dp),
+                                tint = Color(0xFF06B6D4)
                             )
                         }
                         IconButton(onClick = onNewChat) {
@@ -356,6 +367,15 @@ fun MainScreen(
                     MelodyPlayerDialog(
                         state = melodyPlayerState,
                         onDismiss = { viewModel.dismissMelodyPlayer() }
+                    )
+                }
+
+                // Photobooth Conserto
+                if (photoboothState.isVisible) {
+                    PhotoboothDialog(
+                        state = photoboothState,
+                        onRetake = { viewModel.retakePhotobooth() },
+                        onDismiss = { viewModel.dismissPhotobooth() }
                     )
                 }
 

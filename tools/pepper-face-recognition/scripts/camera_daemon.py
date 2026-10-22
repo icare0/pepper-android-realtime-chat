@@ -35,12 +35,18 @@ import threading
 import mmap
 import os
 import struct
+import signal
 from collections import deque
 
 sys.path.insert(0, '/opt/aldebaran/lib/python2.7/site-packages')
 
 # HTTP server imports
 from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
+from SocketServer import ThreadingMixIn
+
+class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
 
 PORT = 5050
 
@@ -176,7 +182,8 @@ class PollingThread(threading.Thread):
                 # Fetch synchronized frame
                 frame_data = get_synchronized_frame_internal()
                 
-                if frame_data:
+                # Ensure frame data and RGB image are valid before updating
+                if frame_data and frame_data.get('rgb'):
                     self.last_frame = frame_data
                     
                     # Push to Shared Memory
@@ -185,12 +192,13 @@ class PollingThread(threading.Thread):
                         frame_data['rgb']
                     )
                 
-                # Sleep a tiny bit to prevent CPU hogging
-                time.sleep(0.01)
+                # Sleep ~30ms (~33Hz polling) to comfortably capture 15 FPS without CPU hogging
+                time.sleep(0.03)
                 
             except Exception as e:
-                print("[Daemon] Polling error: {}".format(e))
-                time.sleep(1.0)
+                # Cleanly handle dropped frames or transient capture errors without crashing
+                print("[Daemon] Polling frame skipped / error: {}".format(e))
+                time.sleep(0.02)
 
 polling_thread = None
 
@@ -306,8 +314,15 @@ def get_head_angles():
         return None
     
     try:
-        head_yaw_rad = memory.getData("Device/SubDeviceList/HeadYaw/Position/Sensor/Value")
-        head_pitch_rad = memory.getData("Device/SubDeviceList/HeadPitch/Position/Sensor/Value")
+        try:
+            angles = memory.getListData([
+                "Device/SubDeviceList/HeadYaw/Position/Sensor/Value",
+                "Device/SubDeviceList/HeadPitch/Position/Sensor/Value"
+            ])
+            head_yaw_rad, head_pitch_rad = angles[0], angles[1]
+        except Exception:
+            head_yaw_rad = memory.getData("Device/SubDeviceList/HeadYaw/Position/Sensor/Value")
+            head_pitch_rad = memory.getData("Device/SubDeviceList/HeadPitch/Position/Sensor/Value")
         
         return {
             "head_yaw": math.degrees(head_yaw_rad),
@@ -488,8 +503,9 @@ class CameraHandler(BaseHTTPRequestHandler):
             self.send_json(frame)
             
         elif self.path == '/rgb':
-            # RGB only
-            rgb = get_rgb_frame()
+            # RGB only (protected by lock against concurrent subscriber access)
+            with lock:
+                rgb = get_rgb_frame()
             self.send_json({"rgb": rgb, "timestamp": time.time()})
             
         elif self.path == '/depth':
@@ -557,10 +573,10 @@ class CameraHandler(BaseHTTPRequestHandler):
 
 
 def run_server():
-    """Run the HTTP server."""
+    """Run the threaded HTTP server."""
     global running
     
-    server = HTTPServer(('127.0.0.1', PORT), CameraHandler)
+    server = ThreadedHTTPServer(('127.0.0.1', PORT), CameraHandler)
     server.timeout = 1.0  # Allow checking running flag
     
     print("[Daemon] Camera daemon running on port {}".format(PORT))
@@ -572,8 +588,20 @@ def run_server():
     print("[Daemon] Server stopped")
 
 
+def sigterm_handler(signum, frame):
+    global running
+    print("\n[Daemon] Received signal {}, shutting down cleanly...".format(signum))
+    running = False
+    cleanup_naoqi()
+    shm_manager.cleanup()
+    sys.exit(0)
+
+
 def main():
     global running
+    
+    # Handle SIGTERM gracefully to unsubscribe from cameras and clean up SHM
+    signal.signal(signal.SIGTERM, sigterm_handler)
     
     print("[Daemon] Starting Camera Daemon...")
     
@@ -589,8 +617,9 @@ def main():
     except Exception as e:
         print("[Daemon] Error: {}".format(e))
     finally:
-        shm_manager.cleanup()
+        running = False
         cleanup_naoqi()
+        shm_manager.cleanup()
         print("[Daemon] Daemon stopped")
 
 

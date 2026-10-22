@@ -105,36 +105,47 @@ internal class LocalizationCoordinator(
         phaseCallback.setPhase(NavigationServiceManager.NavigationPhase.LOCALIZATION_MODE)
 
         try {
-            val localize = LocalizeBuilder.with(qiContext).withMap(explorationMap).build()
-            activeLocalizeAction = localize
-
-            localize.addOnStatusChangedListener { status ->
-                if (status == LocalizationStatus.LOCALIZED) {
-                    isLocalizationReady = true
-                    statusCallback.updateStatus("✅ Map: Ready", "📍 Localization: Localized")
-                    completeSuccess.run()
-                }
-            }
-
-            val future = localize.async().run()
-            activeLocalizeFuture = future
-            future.thenConsume { res ->
-                when {
-                    res.hasError() -> {
-                        Log.e(TAG, "Localization failed", res.error)
-                        isLocalizationReady = false
-                        activeLocalizeAction = null
-                        activeLocalizeFuture = null
-                        statusCallback.updateStatus("✅ Map: Ready", "❌ Localization: Failed")
+            LocalizeBuilder.with(qiContext).withMap(explorationMap).buildAsync()
+                .thenConsume { buildFuture ->
+                    if (buildFuture.hasError() || buildFuture.value == null) {
+                        Log.e(TAG, "Failed to build Localize action", buildFuture.error)
                         mainHandler.post { phaseCallback.setPhase(NavigationServiceManager.NavigationPhase.NORMAL_OPERATION) }
+                        statusCallback.updateStatus("✅ Map: Ready", "❌ Localization: Failed")
                         completeFailure.run()
+                        return@thenConsume
                     }
-                    res.isSuccess -> {
-                        activeLocalizeAction = null
-                        activeLocalizeFuture = null
+
+                    val localize = buildFuture.value
+                    activeLocalizeAction = localize
+
+                    localize.addOnStatusChangedListener { status ->
+                        if (status == LocalizationStatus.LOCALIZED) {
+                            isLocalizationReady = true
+                            statusCallback.updateStatus("✅ Map: Ready", "📍 Localization: Localized")
+                            completeSuccess.run()
+                        }
+                    }
+
+                    val future = localize.async().run()
+                    activeLocalizeFuture = future
+                    future.thenConsume { res ->
+                        when {
+                            res.hasError() -> {
+                                Log.e(TAG, "Localization failed", res.error)
+                                isLocalizationReady = false
+                                activeLocalizeAction = null
+                                activeLocalizeFuture = null
+                                statusCallback.updateStatus("✅ Map: Ready", "❌ Localization: Failed")
+                                mainHandler.post { phaseCallback.setPhase(NavigationServiceManager.NavigationPhase.NORMAL_OPERATION) }
+                                completeFailure.run()
+                            }
+                            res.isSuccess -> {
+                                activeLocalizeAction = null
+                                activeLocalizeFuture = null
+                            }
+                        }
                     }
                 }
-            }
         } catch (t: Throwable) {
             Log.e(TAG, "Failed to start localization", t)
             mainHandler.post { phaseCallback.setPhase(NavigationServiceManager.NavigationPhase.NORMAL_OPERATION) }

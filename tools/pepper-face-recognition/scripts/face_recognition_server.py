@@ -842,12 +842,7 @@ def background_tracking_loop():
         
         # Dynamic update interval from settings
         interval = get_tracking_interval()
-        
-        # Wait before next update (but check if we should stop)
-        for _ in range(int(interval * 10)):
-            if not TRACKING_RUNNING:
-                break
-            time.sleep(0.1)
+        time.sleep(max(0.02, interval))
     
     print("[Tracking] Background thread stopped")
 

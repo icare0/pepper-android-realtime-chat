@@ -7,13 +7,9 @@ import ch.fhnw.pepper_realtime.tools.ToolContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicReference
-
 /**
  * Tool for turning Pepper robot left or right by specific degrees.
- * This is a synchronous tool that waits for turn completion.
+ * Non-blocking implementation: sends initial confirmation and dispatches completion via async update.
  */
 class TurnPepperTool : Tool {
 
@@ -88,14 +84,12 @@ class TurnPepperTool : Tool {
         // Use NavigationServiceManager for coordinated turn with service management
         val navManager = context.navigationServiceManager
 
-        Log.i(TAG, "Starting synchronous turn: $direction $degrees degrees at $speed rad/s")
+        val qiContext = context.qiContext as QiContext
+        val turnDesc = "$direction by %.0f degrees".format(Locale.US, degrees)
 
-        // Create latch to wait for turn completion
-        val latch = CountDownLatch(1)
-        val finalResult = AtomicReference<String>()
+        Log.i(TAG, "Starting non-blocking turn: $direction $degrees degrees at $speed rad/s")
 
         // Execute coordinated turn with service management; return result via Future
-        val qiContext = context.qiContext as QiContext
         navManager.turnPepper(qiContext, direction, degrees, speed)
             .thenConsume { f ->
                 val success = !f.hasError() && f.value?.success == true
@@ -105,37 +99,35 @@ class TurnPepperTool : Tool {
                     f.value?.error
                 }
                 Log.i(TAG, "Turn finished (tool future), success=$success, error=$error")
-                try {
-                    val result = JSONObject()
-                    if (success) {
-                        result.put("status", "Turn completed successfully")
-                        result.put("direction", direction)
-                        result.put("degrees", degrees)
-                        result.put("message", String.format(
-                            Locale.US,
-                            "Turn completed successfully. Pepper has turned %s %.0f degrees.",
-                            direction, degrees
-                        ))
-                    } else {
-                        val userFriendlyError = translateTurnError(error)
-                        result.put("error", String.format(
-                            Locale.US,
-                            "Turn failed: %s", userFriendlyError
-                        ))
-                    }
-                    finalResult.set(result.toString())
-                } catch (e: Exception) {
-                    finalResult.set("{\"error\":\"Failed to create turn result\"}")
+                val message: String
+                if (success) {
+                    message = String.format(
+                        Locale.US,
+                        "[TURN COMPLETED] You have successfully turned %s %.0f degrees. Please inform the user that you have completed the turn.",
+                        direction, degrees
+                    )
+                } else {
+                    val userFriendlyError = translateTurnError(error)
+                    message = String.format(
+                        Locale.US,
+                        "[TURN FAILED] You couldn't complete the turn %s. %s Please inform the user about this problem.",
+                        turnDesc, userFriendlyError
+                    )
                 }
-                latch.countDown()
+                context.sendAsyncUpdate(message, true)
             }
 
-        // Wait for turn to complete (with timeout)
-        return if (latch.await(20, TimeUnit.SECONDS)) {
-            finalResult.get()
-        } else {
-            JSONObject().put("error", "Turn timeout after 20 seconds").toString()
-        }
+        // Return immediate confirmation - non-blocking
+        return JSONObject().apply {
+            put("status", "Turn started")
+            put("message", String.format(
+                Locale.US,
+                "Pepper has started turning %s %.0f degrees. DO NOT tell the user that you have finished turning yet! The turn is still in progress. You will receive another message when Pepper finishes turning.",
+                direction, degrees
+            ))
+            put("direction", direction)
+            put("degrees", degrees)
+        }.toString()
     }
 
 

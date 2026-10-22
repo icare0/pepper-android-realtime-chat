@@ -100,3 +100,26 @@ data class EventRulesState(
     val recentTriggeredRules: List<MatchedRule> = emptyList()
 )
 
+/**
+ * Photobooth state phases.
+ */
+enum class PhotoboothPhase {
+    IDLE,
+    COUNTDOWN,
+    FLASH,
+    RESULT
+}
+
+/**
+ * UI state for Conserto photobooth overlay.
+ */
+data class PhotoboothUiState(
+    val isVisible: Boolean = false,
+    val phase: PhotoboothPhase = PhotoboothPhase.IDLE,
+    val countdown: Int = 3,
+    val photoBitmap: Bitmap? = null,
+    val qrBitmap: Bitmap? = null,
+    val downloadUrl: String? = null,
+    val statusMessage: String = ""
+)
+

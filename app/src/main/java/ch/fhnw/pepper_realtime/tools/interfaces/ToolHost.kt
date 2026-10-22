@@ -14,6 +14,7 @@ interface ToolHost {
     fun isFinishing(): Boolean
     fun handleServiceStateChange(mode: String)
     fun addImageMessage(imagePath: String)
+    fun addTextMessage(text: String, sender: ch.fhnw.pepper_realtime.ui.ChatMessage.Sender = ch.fhnw.pepper_realtime.ui.ChatMessage.Sender.ROBOT)
     fun getSessionImageManager(): SessionImageManager
     fun updateMapPreview()
     fun updateNavigationStatus(mapStatus: String, localizationStatus: String)

@@ -89,6 +89,10 @@ cp -r python_packages_temp/packages/* python_packages/
 rm -rf python_packages_temp
 rm packages.zip
 
+# Convert shell scripts to Unix format and ensure executable
+sed -i 's/\r$//' /home/nao/face_data/*.sh 2>/dev/null
+chmod +x /home/nao/face_data/*.sh 2>/dev/null
+
 echo "Setup complete!"
 '@
 

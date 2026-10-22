@@ -125,8 +125,12 @@ class VideoInputControllerImpl @Inject constructor(
         cameraThread = null
         cameraHandler = null
 
-        // Clear preview frame
+        // Clear preview frame and recycle
+        val oldFrame = _currentFrame.value
         _currentFrame.value = null
+        if (oldFrame != null && !oldFrame.isRecycled) {
+            oldFrame.recycle()
+        }
     }
 
     /**
@@ -291,20 +295,30 @@ class VideoInputControllerImpl @Inject constructor(
             buffer.get(bytes)
 
             // Decode to bitmap
-            var bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return
+            val rawBitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return
 
             // Rotate for front camera
-            bitmap = rotateBitmapForFrontCamera(bitmap)
+            val rotatedBitmap = rotateBitmapForFrontCamera(rawBitmap)
+            if (rotatedBitmap != rawBitmap) {
+                rawBitmap.recycle()
+            }
 
             // Scale down for token efficiency
-            bitmap = scaleBitmap(bitmap, TARGET_SIZE)
+            val finalBitmap = scaleBitmap(rotatedBitmap, TARGET_SIZE)
+            if (finalBitmap != rotatedBitmap) {
+                rotatedBitmap.recycle()
+            }
 
-            // Update preview frame
-            _currentFrame.value = bitmap
+            // Update preview frame and recycle previous frame
+            val oldFrame = _currentFrame.value
+            _currentFrame.value = finalBitmap
+            if (oldFrame != null && oldFrame != finalBitmap && !oldFrame.isRecycled) {
+                oldFrame.recycle()
+            }
 
             // Compress to JPEG
             val baos = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, baos)
+            finalBitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, baos)
             val jpegBytes = baos.toByteArray()
 
             // Base64 encode

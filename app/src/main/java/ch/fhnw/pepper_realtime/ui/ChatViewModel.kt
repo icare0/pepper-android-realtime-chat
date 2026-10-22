@@ -17,6 +17,7 @@ import ch.fhnw.pepper_realtime.manager.FaceManager
 import ch.fhnw.pepper_realtime.manager.MelodyManager
 import ch.fhnw.pepper_realtime.manager.MemoryGameManager
 import ch.fhnw.pepper_realtime.manager.NavigationManager
+import ch.fhnw.pepper_realtime.manager.PhotoboothManager
 import ch.fhnw.pepper_realtime.manager.QuizGameManager
 import ch.fhnw.pepper_realtime.manager.TicTacToeGameManager
 import ch.fhnw.pepper_realtime.service.LocalFaceRecognitionService
@@ -51,7 +52,8 @@ class ChatViewModel @Inject constructor(
     private val navigationManager: NavigationManager,
     private val dashboardManager: DashboardManager,
     private val eventRulesManager: EventRulesManager,
-    private val faceManager: FaceManager
+    private val faceManager: FaceManager,
+    private val photoboothManager: PhotoboothManager
 ) : AndroidViewModel(application) {
 
     companion object {
@@ -129,6 +131,7 @@ class ChatViewModel @Inject constructor(
     val faceManagementState: StateFlow<FaceManagementState> = faceManager.faceManagementState
     val perceptionSettingsState: StateFlow<PerceptionSettingsState> = faceManager.perceptionSettingsState
     val eventRulesState: StateFlow<EventRulesState> = eventRulesManager.state
+    val photoboothState: StateFlow<PhotoboothUiState> = photoboothManager.state
 
     init {
         // Provide coroutine scope to game managers
@@ -137,6 +140,7 @@ class ChatViewModel @Inject constructor(
         drawingGameManager.setCoroutineScope(viewModelScope)
         melodyManager.setCoroutineScope(viewModelScope)
         faceManager.setCoroutineScope(viewModelScope)
+        photoboothManager.setCoroutineScope(viewModelScope)
         
         // Setup dashboard callback to refresh faces when opened
         dashboardManager.setOnDashboardOpenedCallback { refreshFaceList() }
@@ -366,6 +370,38 @@ class ChatViewModel @Inject constructor(
      */
     fun dismissMelodyPlayer() {
         melodyManager.dismissMelodyPlayer()
+    }
+
+    // Conserto Photobooth Methods - delegated to PhotoboothManager
+    /**
+     * Start the Conserto photobooth sequence (countdown -> photo -> watermark -> QR code).
+     */
+    fun startPhotobooth(): Boolean {
+        return photoboothManager.startPhotobooth(
+            onPhotoReady = { photoPath ->
+                addImageMessage(photoPath)
+                addMessage(ChatMessage("📸 Photo Conserto capturée !", ChatMessage.Sender.ROBOT))
+            }
+        )
+    }
+
+    /**
+     * Retake the photobooth photo.
+     */
+    fun retakePhotobooth() {
+        photoboothManager.retakePhotobooth(
+            onPhotoReady = { photoPath ->
+                addImageMessage(photoPath)
+                addMessage(ChatMessage("📸 Nouvelle photo Conserto capturée !", ChatMessage.Sender.ROBOT))
+            }
+        )
+    }
+
+    /**
+     * Dismiss the photobooth overlay and stop HTTP server.
+     */
+    fun dismissPhotobooth() {
+        photoboothManager.dismissPhotobooth()
     }
 
     /**
@@ -624,4 +660,9 @@ class ChatViewModel @Inject constructor(
     fun exportEventRules(): String = eventRulesManager.exportEventRules()
     fun importEventRules(json: String, merge: Boolean = false): Int = eventRulesManager.importEventRules(json, merge)
     fun setEditingRule(rule: EventRule?) = eventRulesManager.setEditingRule(rule)
+
+    override fun onCleared() {
+        super.onCleared()
+        photoboothManager.dismissPhotobooth()
+    }
 }

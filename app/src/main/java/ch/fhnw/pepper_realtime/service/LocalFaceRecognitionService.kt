@@ -40,9 +40,9 @@ class LocalFaceRecognitionService @Inject constructor(
         private const val PORT = 5000
         
         // SSH commands for server management
-        private const val START_SERVER_CMD = "nohup bash /home/nao/face_data/run_server.sh > /home/nao/face_data/server.log 2>&1 &"
+        private const val START_SERVER_CMD = "sed -i 's/\\r$//' /home/nao/face_data/run_server.sh 2>/dev/null; chmod +x /home/nao/face_data/run_server.sh 2>/dev/null; nohup bash /home/nao/face_data/run_server.sh > /home/nao/face_data/server.log 2>&1 &"
         private const val CHECK_SERVER_CMD = "pgrep -f face_recognition_server.py"
-        private const val KILL_SERVER_CMD = "pkill -f face_recognition_server.py"
+        private const val KILL_SERVER_CMD = "pkill -f face_recognition_server.py; pkill -f camera_daemon.py; pkill -f run_server.sh"
     }
 
     private var pepperHeadIp: String = DEFAULT_PEPPER_HEAD_IP

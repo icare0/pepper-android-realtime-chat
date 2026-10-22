@@ -5,12 +5,14 @@ import com.aldebaran.qi.Future
 import com.aldebaran.qi.sdk.QiContext
 import com.aldebaran.qi.sdk.builder.AnimateBuilder
 import com.aldebaran.qi.sdk.builder.AnimationBuilder
+import com.aldebaran.qi.sdk.builder.EnforceTabletReachabilityBuilder
 import com.aldebaran.qi.sdk.`object`.actuation.Animate
 import com.aldebaran.qi.sdk.`object`.actuation.Animation
 import ch.fhnw.pepper_realtime.R
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
 import kotlin.random.Random
 
 /**
@@ -36,16 +38,216 @@ class GestureController {
         private const val BASE_DELAY_MS = 350
         private const val MAX_DELAY_MS = 2000 // Max backoff delay
         private const val LOG_FAILURE_THRESHOLD = 3 // Only log after 3 consecutive failures
+
+        // Grace period before returning arms to safe posture after speech ends (prevents jerky arm drops between speech turns)
+        private const val SAFE_POSTURE_GRACE_PERIOD_MS = 2000L
+        // Extended grace period for listening state before resetting if no interaction occurs
+        private const val LISTENING_INACTIVITY_RESET_MS = 8000L
+
+        // Subtle thinking animation XML (pure head tilt up and to the side, zero arm movement/motor noise)
+        private const val THINKING_ANIMATION_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<Animation typeVersion="2.0" fps="25">
+    <ActuatorCurve fps="25" actuator="HeadPitch" mute="false" unit="degree">
+        <Key value="-6.0" frame="15"/>
+        <Key value="-3.0" frame="30"/>
+    </ActuatorCurve>
+    <ActuatorCurve fps="25" actuator="HeadYaw" mute="false" unit="degree">
+        <Key value="5.0" frame="15"/>
+        <Key value="2.0" frame="30"/>
+    </ActuatorCurve>
+</Animation>"""
     }
 
     private var gestureExecutor: ExecutorService? = Executors.newSingleThreadExecutor()
+    private var scheduler: ScheduledExecutorService? = Executors.newSingleThreadScheduledExecutor()
     @Volatile private var running = false
+    @Volatile private var isThinking = false
     @Volatile private var currentRunFuture: Future<Void>? = null
+    @Volatile private var currentThinkingFuture: Future<Void>? = null
+    @Volatile private var currentReachabilityFuture: Future<Void>? = null
+    @Volatile private var pendingSafePostureFuture: java.util.concurrent.ScheduledFuture<*>? = null
+    @Volatile private var cachedQiContext: QiContext? = null
     private var consecutiveFailures = 0
 
     // Animation cache for performance optimization (lazy loading)
     private val animationCache = ConcurrentHashMap<Int, Animation>()
     private val animateCache = ConcurrentHashMap<Int, Animate>()
+    @Volatile private var cachedThinkingAnimate: Animate? = null
+
+    @Synchronized
+    private fun getOrCreateScheduler(): ScheduledExecutorService {
+        val s = scheduler
+        return if (s == null || s.isShutdown || s.isTerminated) {
+            val newScheduler = Executors.newSingleThreadScheduledExecutor()
+            scheduler = newScheduler
+            newScheduler
+        } else {
+            s
+        }
+    }
+
+    /**
+     * Cancels any scheduled return-to-safe-posture timer.
+     * Keeps arms in conversational resting position while interaction is ongoing.
+     */
+    @Synchronized
+    fun cancelPendingSafePostureReset() {
+        pendingSafePostureFuture?.let { f ->
+            if (!f.isDone) {
+                f.cancel(false)
+                Log.d(TAG, "Cancelled pending safe posture reset (interaction active)")
+            }
+        }
+        pendingSafePostureFuture = null
+    }
+
+    /**
+     * Schedules a smooth reset to safe neutral posture after a grace period.
+     * Prevents Pepper's arms from repeatedly slamming down onto the tablet during conversational pauses.
+     */
+    @Synchronized
+    fun scheduleResetToSafePosture(delayMs: Long = SAFE_POSTURE_GRACE_PERIOD_MS) {
+        cancelPendingSafePostureReset()
+        try {
+            pendingSafePostureFuture = getOrCreateScheduler().schedule({
+                if (!running && !isThinking) {
+                    Log.d(TAG, "Grace period expired (${delayMs}ms) - returning to safe neutral posture")
+                    resetToSafePosture()
+                } else {
+                    Log.d(TAG, "Grace period expired but robot is active (running=$running, isThinking=$isThinking), skipping reset")
+                }
+            }, delayMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            Log.d(TAG, "Scheduled safe posture reset with ${delayMs}ms grace period")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to schedule safe posture reset, resetting immediately", e)
+            resetToSafePosture()
+        }
+    }
+
+    /**
+     * Called when the interaction enters LISTENING state.
+     * Stops thinking or speech gestures and cancels safe posture reset to maintain a natural posture,
+     * without arm movement so as not to pollute the microphone.
+     */
+    fun onEnterListening(robotContext: Any?) {
+        if (robotContext == null) return
+        val qiContext = robotContext as QiContext
+        cachedQiContext = qiContext
+
+        // Stop thinking animation
+        stopThinking()
+
+        // Stop speech gestures to avoid arm motor noise during speech recognition
+        running = false
+        try {
+            currentRunFuture?.let { f ->
+                if (!f.isDone) {
+                    f.requestCancellation()
+                }
+            }
+        } catch (ignored: Exception) {
+        }
+        currentRunFuture = null
+
+        // Cancel immediate reset so arms remain in natural resting posture, but reset after inactivity
+        cancelPendingSafePostureReset()
+        scheduleResetToSafePosture(LISTENING_INACTIVITY_RESET_MS)
+        Log.d(TAG, "onEnterListening: arms kept in natural posture, inactivity reset in ${LISTENING_INACTIVITY_RESET_MS}ms")
+    }
+
+    /**
+     * Called when the interaction enters THINKING state (waiting for LLM response).
+     * Plays a subtle head-tilt thinking animation without moving arms to mask latency.
+     */
+    fun onEnterThinking(robotContext: Any?) {
+        if (robotContext == null) return
+        val qiContext = robotContext as QiContext
+        cachedQiContext = qiContext
+
+        // Cancel any pending safe posture reset
+        cancelPendingSafePostureReset()
+
+        // Stop any active speech loop
+        running = false
+        try {
+            currentRunFuture?.let { f ->
+                if (!f.isDone) {
+                    f.requestCancellation()
+                }
+            }
+        } catch (ignored: Exception) {
+        }
+        currentRunFuture = null
+
+        if (isThinking) return
+        isThinking = true
+        Log.d(TAG, "onEnterThinking: starting subtle thinking posture")
+        startThinkingGesture(qiContext)
+    }
+
+    /**
+     * Stops the thinking posture animation.
+     */
+    fun stopThinking() {
+        if (!isThinking && currentThinkingFuture == null) return
+        isThinking = false
+        try {
+            currentThinkingFuture?.requestCancellation()
+        } catch (ignored: Exception) {
+        }
+        currentThinkingFuture = null
+        Log.d(TAG, "Thinking posture stopped")
+    }
+
+    private fun startThinkingGesture(qiContext: QiContext) {
+        gestureExecutor?.submit {
+            if (!isThinking) return@submit
+            getOrBuildThinkingAnimateAsync(qiContext)
+                .andThenConsume { animate ->
+                    if (animate == null || !isThinking) return@andThenConsume
+                    currentThinkingFuture = animate.async().run()
+                    currentThinkingFuture?.thenConsume {
+                        currentThinkingFuture = null
+                    }
+                }
+        }
+    }
+
+    private fun getOrBuildThinkingAnimateAsync(qiContext: QiContext): Future<Animate> {
+        val cached = cachedThinkingAnimate
+        if (cached != null) {
+            return Future.of(cached)
+        }
+
+        return AnimationBuilder.with(qiContext)
+            .withTexts(THINKING_ANIMATION_XML)
+            .buildAsync()
+            .andThenCompose { animation ->
+                if (animation != null) {
+                    AnimateBuilder.with(qiContext)
+                        .withAnimation(animation)
+                        .buildAsync()
+                } else {
+                    // Fallback to explain_06 if text animation build is unsupported
+                    getOrBuildAnimationAsync(qiContext, R.raw.explain_06)
+                        .andThenCompose { fallbackAnim ->
+                            if (fallbackAnim != null) {
+                                AnimateBuilder.with(qiContext)
+                                    .withAnimation(fallbackAnim)
+                                    .buildAsync()
+                            } else {
+                                Future.of(null)
+                            }
+                        }
+                }
+            }
+            .andThenCompose { animate ->
+                if (animate != null) {
+                    cachedThinkingAnimate = animate
+                }
+                Future.of(animate)
+            }
+    }
 
     fun start(robotContext: Any?, keepRunning: BoolSupplier, nextResId: IntSupplier) {
         if (robotContext == null) {
@@ -53,6 +255,16 @@ class GestureController {
             return
         }
         val qiContext = robotContext as QiContext
+        cachedQiContext = qiContext
+
+        // Stop thinking animation if it was running
+        stopThinking()
+
+        // Cancel any pending return-to-safe-posture action since speech gestures are resuming
+        cancelPendingSafePostureReset()
+        currentReachabilityFuture?.requestCancellation()
+        currentReachabilityFuture = null
+
         if (running) {
             Log.d(TAG, "GestureController already running, skipping start")
             return
@@ -215,7 +427,7 @@ class GestureController {
         }
     }
 
-    fun stopNow() {
+    fun stopNow(immediateReset: Boolean = false) {
         running = false
         consecutiveFailures = 0 // Reset failure counter when stopping
         try {
@@ -229,6 +441,53 @@ class GestureController {
             }
         } catch (ignored: Exception) {
         }
+        currentRunFuture = null
+
+        if (immediateReset) {
+            cancelPendingSafePostureReset()
+            resetToSafePosture()
+        } else {
+            // Apply grace period to avoid abrupt arm falls between speech turns
+            scheduleResetToSafePosture()
+        }
+    }
+
+    /**
+     * Called when exiting the SPEAKING state.
+     * Stops the speech animation loop and activates the grace period timer before returning arms to safe posture.
+     */
+    fun onExitSpeaking() {
+        Log.i(TAG, "Exiting SPEAKING state - stopping speech gestures with grace period")
+        stopNow(immediateReset = false)
+    }
+
+    /**
+     * Resets robot arms and posture to a safe neutral position.
+     * Prevents arms from staying suspended mid-air and holding motor stiffness unnecessarily.
+     */
+    fun resetToSafePosture() {
+        val qiContext = cachedQiContext ?: return
+        if (running || isThinking) return
+        try {
+            currentReachabilityFuture?.requestCancellation()
+            currentReachabilityFuture = EnforceTabletReachabilityBuilder.with(qiContext)
+                .buildAsync()
+                .andThenCompose { reachability ->
+                    reachability?.async()?.run() ?: Future.of(null)
+                }
+            currentReachabilityFuture?.thenConsume { fut ->
+                if (fut.isSuccess) {
+                    Log.d(TAG, "Robot posture reset: Arms safely returned to neutral position")
+                } else if (fut.hasError()) {
+                    Log.d(TAG, "Robot posture reset cancelled or interrupted: ${fut.error?.message}")
+                }
+                if (currentReachabilityFuture == fut) {
+                    currentReachabilityFuture = null
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to reset robot arms to safe posture", e)
+        }
     }
 
     /**
@@ -237,7 +496,9 @@ class GestureController {
      */
     fun pause() {
         Log.i(TAG, "GestureController paused")
-        stopNow()
+        stopThinking()
+        cancelPendingSafePostureReset()
+        stopNow(immediateReset = true)
     }
 
     /**
@@ -249,7 +510,17 @@ class GestureController {
     }
 
     fun shutdown() {
-        stopNow()
+        stopThinking()
+        cancelPendingSafePostureReset()
+        stopNow(immediateReset = true)
+        cachedQiContext = null
+        currentReachabilityFuture?.requestCancellation()
+        currentReachabilityFuture = null
+        try {
+            scheduler?.shutdownNow()
+        } catch (ignored: Exception) {
+        }
+        scheduler = null
         try {
             gestureExecutor?.shutdownNow()
         } catch (ignored: Exception) {
@@ -257,6 +528,7 @@ class GestureController {
         // Clear caches on shutdown
         animationCache.clear()
         animateCache.clear()
+        cachedThinkingAnimate = null
     }
 
     fun getRandomExplainAnimationResId(): Int {

@@ -36,7 +36,7 @@ import java.io.FileOutputStream
  * Standalone implementation of VisionService using Android device camera.
  * Automatically captures photos with the front camera and sends them to vision API.
  */
-class VisionService(context: Context) {
+class VisionService(activityContext: Context) {
 
     interface Callback {
         fun onResult(resultJson: String)
@@ -55,8 +55,8 @@ class VisionService(context: Context) {
         private const val GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
     }
 
-    private val context: Context = context.applicationContext
-    private val activityRef: ChatActivity? = if (context is ChatActivity) context else null
+    private val context: Context = activityContext.applicationContext
+    private val activityRef: ChatActivity? = if (activityContext is ChatActivity) activityContext else null
     private val http = HttpClientManager.getInstance().getApiClient()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -136,6 +136,151 @@ class VisionService(context: Context) {
 
         // Capture photo automatically
         capturePhotoAutomatically(prompt, apiKey, callback)
+    }
+
+    /**
+     * Capture a single raw photo from the front camera without vision API analysis.
+     * Used for Photobooth and local photo features.
+     */
+    fun captureRawPhoto(callback: (Bitmap?) -> Unit) {
+        if (working) {
+            callback(null)
+            return
+        }
+        if (activityRef == null) {
+            callback(null)
+            return
+        }
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
+            != PackageManager.PERMISSION_GRANTED) {
+            callback(null)
+            return
+        }
+
+        working = true
+        try {
+            val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            var frontCameraId: String? = null
+            for (cameraId in cameraManager.cameraIdList) {
+                val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+                val facing = characteristics.get(CameraCharacteristics.LENS_FACING)
+                if (facing == CameraCharacteristics.LENS_FACING_FRONT) {
+                    frontCameraId = cameraId
+                    break
+                }
+            }
+
+            if (frontCameraId == null) {
+                working = false
+                callback(null)
+                return
+            }
+
+            dummySurfaceTexture = SurfaceTexture(10)
+            dummySurfaceTexture?.setDefaultBufferSize(640, 480)
+            dummySurface = Surface(dummySurfaceTexture)
+
+            imageReader = ImageReader.newInstance(1280, 720, ImageFormat.JPEG, 2).also { reader ->
+                reader.setOnImageAvailableListener({ r ->
+                    val image = r.acquireLatestImage()
+                    if (image != null) {
+                        try {
+                            val buffer = image.planes[0].buffer
+                            val bytes = ByteArray(buffer.remaining())
+                            buffer.get(bytes)
+                            var bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                            if (bitmap != null) {
+                                bitmap = rotateBitmapForFrontCamera(bitmap)
+                            }
+                            cleanupCamera()
+                            working = false
+                            callback(bitmap)
+                        } catch (e: Exception) {
+                            cleanupCamera()
+                            working = false
+                            callback(null)
+                        } finally {
+                            image.close()
+                        }
+                    }
+                }, cameraHandler)
+            }
+
+            cameraManager.openCamera(frontCameraId, object : CameraDevice.StateCallback() {
+                override fun onOpened(camera: CameraDevice) {
+                    cameraDevice = camera
+                    val device = cameraDevice ?: return
+                    val reader = imageReader ?: return
+                    val previewSurface = dummySurface ?: return
+
+                    try {
+                        device.createCaptureSession(
+                            listOf(reader.surface, previewSurface),
+                            object : CameraCaptureSession.StateCallback() {
+                                override fun onConfigured(session: CameraCaptureSession) {
+                                    captureSession = session
+                                    try {
+                                        val previewRequestBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+                                        previewRequestBuilder.addTarget(previewSurface)
+                                        previewRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                                        previewRequestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH)
+                                        session.setRepeatingRequest(previewRequestBuilder.build(), null, cameraHandler)
+
+                                        cameraHandler?.postDelayed({
+                                            try {
+                                                val captureBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
+                                                captureBuilder.addTarget(reader.surface)
+                                                captureBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                                                captureBuilder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH)
+                                                session.capture(captureBuilder.build(), null, cameraHandler)
+                                            } catch (e: CameraAccessException) {
+                                                cleanupCamera()
+                                                working = false
+                                                callback(null)
+                                            }
+                                        }, 800)
+                                    } catch (e: Exception) {
+                                        cleanupCamera()
+                                        working = false
+                                        callback(null)
+                                    }
+                                }
+
+                                override fun onConfigureFailed(session: CameraCaptureSession) {
+                                    cleanupCamera()
+                                    working = false
+                                    callback(null)
+                                }
+                            },
+                            cameraHandler
+                        )
+                    } catch (e: CameraAccessException) {
+                        cleanupCamera()
+                        working = false
+                        callback(null)
+                    }
+                }
+
+                override fun onDisconnected(camera: CameraDevice) {
+                    camera.close()
+                    cameraDevice = null
+                    if (working) {
+                        working = false
+                        callback(null)
+                    }
+                }
+
+                override fun onError(camera: CameraDevice, error: Int) {
+                    camera.close()
+                    cameraDevice = null
+                    working = false
+                    callback(null)
+                }
+            }, cameraHandler)
+        } catch (e: Exception) {
+            working = false
+            callback(null)
+        }
     }
 
     /**
@@ -408,6 +553,14 @@ class VisionService(context: Context) {
                 ByteArrayOutputStream().use { baos ->
                     optimizedBitmap.compress(Bitmap.CompressFormat.JPEG, 75, baos)
                     jpegBytes = baos.toByteArray()
+                }
+
+                // Explicitly recycle bitmaps to prevent memory leaks on Android Dalvik heap
+                if (optimizedBitmap != bitmap) {
+                    bitmap.recycle()
+                    optimizedBitmap.recycle()
+                } else {
+                    bitmap.recycle()
                 }
 
                 // Save to cache file (async, non-blocking)

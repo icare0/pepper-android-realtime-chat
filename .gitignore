@@ -24,3 +24,5 @@ tools/pepper-face-recognition/output/
 
 # Linting reports
 lintr/
+/.idea/.name
+/.idea/markdown.xml

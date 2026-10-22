@@ -88,19 +88,23 @@ class PlayAnimationTool : Tool {
                 .andThenCompose { animation ->
                     AnimateBuilder.with(qiContext)
                         .withAnimation(animation)
-                        .build()
-                        .async()
-                        .run()
+                        .buildAsync()
+                        .andThenCompose { animate ->
+                            animate.async().run()
+                        }
                 }
                 .thenConsume { future ->
                     if (future.isSuccess) {
                         Log.i(TAG, "Animation '$name' completed successfully")
                     } else if (future.hasError()) {
                         Log.e(TAG, "Animation '$name' failed", future.error)
+                        // Ensure Pepper returns to safe posture if animation failed mid-way
+                        context.gestureController.resetToSafePosture()
                     }
                 }
         } catch (e: Exception) {
             Log.e(TAG, "Error starting animation '$name'", e)
+            context.gestureController.resetToSafePosture()
             return JSONObject()
                 .put("status", "failed")
                 .put("name", name)

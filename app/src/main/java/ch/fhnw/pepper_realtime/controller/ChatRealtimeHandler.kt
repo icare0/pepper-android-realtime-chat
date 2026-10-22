@@ -43,10 +43,10 @@ class ChatRealtimeHandler(
     var sessionController: ChatSessionController? = null
 
     // Track pending Google tool calls to cancel them if interrupted
-    private val pendingGoogleToolCalls = mutableSetOf<String>()
+    private val pendingGoogleToolCalls = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     
     // Google Live API: counter to generate unique turn IDs
-    private var googleTurnCounter = 0
+    private val googleTurnCounter = java.util.concurrent.atomic.AtomicInteger(0)
 
     fun setToolContext(context: ToolContext?) {
         this.toolContext = context
@@ -404,7 +404,7 @@ class ChatRealtimeHandler(
     override fun onGoogleModelTurnStarted() {
         // First modelTurn received - Google has started responding
         // Increment turn counter for new response ID
-        googleTurnCounter++
+        googleTurnCounter.incrementAndGet()
         
         // Clear the manual interrupt flag - new turn means user triggered new response
         viewModel.setIgnoreGoogleAudio(false)
@@ -419,7 +419,7 @@ class ChatRealtimeHandler(
     }
     
     // Helper to get current Google turn ID
-    private fun getGoogleTurnId(): String = "google_turn_$googleTurnCounter"
+    private fun getGoogleTurnId(): String = "google_turn_${googleTurnCounter.get()}"
 
     override fun onGoogleInterrupted() {
         Log.i(TAG, "Google: Barge-in detected - stopping audio playback")

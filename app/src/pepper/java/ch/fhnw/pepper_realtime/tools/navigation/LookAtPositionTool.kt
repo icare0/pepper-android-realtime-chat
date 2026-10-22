@@ -209,7 +209,7 @@ class LookAtPositionTool : Tool {
                 Log.i(TAG, "Head alignment complete - returning success")
 
                 // LookAt has started successfully and aligned, now schedule auto-cancel
-                val cancelTimer = Timer()
+                val cancelTimer = Timer("LookAtTimer", true)
                 cancelTimer.schedule(object : TimerTask() {
                     override fun run() {
                         Log.i(TAG, String.format(Locale.US, "Auto-cancelling LookAt after %.1f seconds", duration))

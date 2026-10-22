@@ -1,6 +1,7 @@
 package ch.fhnw.pepper_realtime.tools
 
 import android.util.Log
+import ch.fhnw.pepper_realtime.tools.entertainment.PhotoboothTool
 import ch.fhnw.pepper_realtime.tools.entertainment.PlayAnimationTool
 import ch.fhnw.pepper_realtime.tools.entertainment.PlayMelodyTool
 import ch.fhnw.pepper_realtime.tools.entertainment.PlayYouTubeVideoTool
@@ -68,6 +69,7 @@ class ToolRegistry {
         registerTool("play_animation") { PlayAnimationTool() }
         registerTool("play_melody") { PlayMelodyTool() }
         registerTool("play_youtube_video") { PlayYouTubeVideoTool() }
+        registerTool("start_photobooth") { PhotoboothTool() }
 
         // Navigation tools
         registerTool("move_pepper") { MovePepperTool() }

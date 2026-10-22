@@ -6,6 +6,8 @@ import android.media.AudioManager
 import android.media.AudioTrack
 import android.os.SystemClock
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.Process
 import android.util.Log
 import java.util.Arrays
@@ -379,7 +381,7 @@ class AudioPlayer {
             override fun onPeriodicNotification(track: AudioTrack) {
                 // Not used
             }
-        })
+        }, Handler(Looper.getMainLooper()))
     }
 
     private fun hasSufficientBuffer(): Boolean {
@@ -575,7 +577,13 @@ class AudioPlayer {
             // Wait for completion callback with timeout
             val startWait = System.nanoTime()
             while (!playbackCompleted.get() && !shouldStop.get()) {
-                if (track != null) observePlaybackProgress(track)
+                if (track != null) {
+                    observePlaybackProgress(track)
+                    if (targetFrames > 0 && track.playbackHeadPosition >= (responseStartFrames + targetFrames)) {
+                        playbackCompleted.set(true)
+                        break
+                    }
+                }
                 LockSupport.parkNanos(2_000_000) // 2ms - just for timeout check
 
                 // Safety timeout

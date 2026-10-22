@@ -30,6 +30,11 @@ class ChatTurnListener @Inject constructor(
                 return
             }
 
+            // Update robot posture for LISTENING state (cancels safe posture reset, avoids arm noise)
+            if (qiContext != null) {
+                gestureController.onEnterListening(qiContext)
+            }
+
             // Check user's mute intent (persists across state changes)
             val userWantsMicOn = viewModel.userWantsMicOn.value
             
@@ -72,6 +77,14 @@ class ChatTurnListener @Inject constructor(
         }
         viewModel.setStatusText(getString(R.string.status_thinking))
         viewModel.setInterruptFabVisible(false)
+
+        // Trigger subtle thinking posture (masks LLM response latency)
+        val qiContext = robotFocusManager.qiContext
+        if (qiContext != null) {
+            if (navigationServiceManager == null || !navigationServiceManager.areGesturesSuppressed()) {
+                gestureController.onEnterThinking(qiContext)
+            }
+        }
     }
 
     override fun onEnterSpeaking() {
@@ -98,8 +111,8 @@ class ChatTurnListener @Inject constructor(
     }
 
     override fun onExitSpeaking() {
-        Log.i(TAG, "State: Exiting SPEAKING - stopping gestures")
-        gestureController.stopNow()
+        Log.i(TAG, "State: Exiting SPEAKING - stopping gestures with grace period")
+        gestureController.onExitSpeaking()
         
         // Don't set status text here - let onEnterListening or onEnterThinking handle it
         // Setting "listening" here would override the correct "thinking" status when
