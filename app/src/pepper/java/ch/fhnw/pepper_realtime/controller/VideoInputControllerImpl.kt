@@ -141,9 +141,16 @@ class VideoInputControllerImpl @Inject constructor(
 
             // Optimize for token efficiency
             val optimizedBitmap = optimizeBitmap(bitmap, TARGET_SIZE)
+            if (optimizedBitmap != bitmap) {
+                bitmap.recycle()
+            }
 
-            // Update preview frame
+            // Update preview frame and safely recycle previous frame
+            val oldFrame = _currentFrame.value
             _currentFrame.value = optimizedBitmap
+            if (oldFrame != null && oldFrame != optimizedBitmap && !oldFrame.isRecycled) {
+                oldFrame.recycle()
+            }
 
             // Compress to JPEG
             val jpegBytes: ByteArray
@@ -220,8 +227,12 @@ class VideoInputControllerImpl @Inject constructor(
         takePictureAction = null
         qiContext = null
 
-        // Clear preview frame
+        // Clear preview frame and recycle
+        val oldFrame = _currentFrame.value
         _currentFrame.value = null
+        if (oldFrame != null && !oldFrame.isRecycled) {
+            oldFrame.recycle()
+        }
     }
 
     override fun toggleStreaming(): Boolean {

@@ -37,7 +37,7 @@ class TicTacToeMoveTool : Tool {
     }
 
     override fun execute(args: JSONObject, context: ToolContext): String {
-        val position = args.getInt("position")
+        val position = args.optInt("position", -1)
         Log.i("TicTacToeMoveTool", "AI making Tic Tac Toe move at position: $position")
 
         val activity = context.activity as? ChatActivity

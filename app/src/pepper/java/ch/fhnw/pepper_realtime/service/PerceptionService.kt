@@ -1,7 +1,5 @@
 package ch.fhnw.pepper_realtime.service
 
-import android.os.Handler
-import android.os.HandlerThread
 import android.util.Log
 import com.aldebaran.qi.sdk.QiContext
 import com.aldebaran.qi.sdk.`object`.human.Human
@@ -68,10 +66,6 @@ class PerceptionService {
     private var firedCloseApproach: MutableSet<Int> = mutableSetOf()
     private var firedInteractionApproach: MutableSet<Int> = mutableSetOf()
 
-    // Threading
-    private var monitoringThread: HandlerThread? = null
-    private var monitoringHandler: Handler? = null
-    
     // Use a recreatable scope - gets recreated if cancelled
     private var serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var peopleCollectionJob: Job? = null
@@ -89,23 +83,6 @@ class PerceptionService {
 
     init {
         Log.d(TAG, "PerceptionService created (WebSocket mode)")
-        ensureMonitoringThreadReady()
-    }
-
-    /**
-     * Ensures the monitoring thread and handler are ready.
-     */
-    @Synchronized
-    private fun ensureMonitoringThreadReady() {
-        if (monitoringThread == null || monitoringThread?.isAlive != true) {
-            Log.i(TAG, "Initializing monitoring thread")
-            monitoringThread = HandlerThread("PerceptionMonitoringThread").also {
-                it.start()
-                monitoringHandler = Handler(it.looper)
-            }
-        } else if (monitoringHandler == null) {
-            monitoringHandler = Handler(monitoringThread!!.looper)
-        }
     }
 
     /**
@@ -146,8 +123,6 @@ class PerceptionService {
      * QiContext is optional - only used for approach recommendations.
      */
     fun initialize(robotContext: Any?) {
-        ensureMonitoringThreadReady()
-
         // QiContext is optional - only for approach recommendations
         if (robotContext != null) {
             try {
@@ -302,17 +277,6 @@ class PerceptionService {
         this.qiContext = null
         this.listener = null
         this.humanAwareness = null
-
-        monitoringThread?.let { thread ->
-            thread.quitSafely()
-            try {
-                thread.join(1000)
-            } catch (e: InterruptedException) {
-                Log.w(TAG, "Interrupted while waiting for monitoring thread to stop", e)
-            }
-        }
-        monitoringThread = null
-        monitoringHandler = null
 
         Log.i(TAG, "PerceptionService shutdown")
     }

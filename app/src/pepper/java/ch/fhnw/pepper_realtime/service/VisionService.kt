@@ -31,7 +31,7 @@ import kotlin.math.roundToInt
  * Uses Groq API or Realtime API to analyze what the camera sees.
  */
 @Suppress("SpellCheckingInspection") // API provider names (Groq)
-class VisionService(context: Context) {
+class VisionService(activityContext: Context) {
 
     interface Callback {
         fun onResult(resultJson: String)
@@ -46,8 +46,8 @@ class VisionService(context: Context) {
         private const val GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
     }
 
-    private val context: Context = context.applicationContext
-    private val activityRef: ChatActivity? = if (context is ChatActivity) context else null
+    private val context: Context = activityContext.applicationContext
+    private val activityRef: ChatActivity? = if (activityContext is ChatActivity) activityContext else null
     private val http: OkHttpClient = HttpClientManager.getInstance().getApiClient()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -92,6 +92,38 @@ class VisionService(context: Context) {
         takePictureAndAnalyze(prompt ?: "", groqApiKey ?: "", callback)
     }
 
+    /**
+     * Capture a single raw photo from Pepper's head camera without API analysis.
+     * Used for Photobooth and local photo features.
+     */
+    fun captureRawPhoto(callback: (Bitmap?) -> Unit) {
+        val action = takePictureAction
+        if (action == null) {
+            Log.w(TAG, "captureRawPhoto: Robot camera not initialized")
+            callback(null)
+            return
+        }
+
+        Log.i(TAG, "Capturing raw photo from robot head camera...")
+        serviceScope.launch {
+            try {
+                action.andThenCompose { takePicture -> takePicture.async().run() }
+                    .andThenConsume { timestampedImageHandle ->
+                        try {
+                            val bitmap = convertToBitmap(timestampedImageHandle)
+                            callback(bitmap)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to convert robot camera image", e)
+                            callback(null)
+                        }
+                    }
+            } catch (e: Exception) {
+                Log.e(TAG, "captureRawPhoto failed", e)
+                callback(null)
+            }
+        }
+    }
+
     private fun takePictureAndAnalyze(prompt: String, apiKey: String, callback: Callback) {
         val action = takePictureAction
         if (action == null) {
@@ -107,44 +139,59 @@ class VisionService(context: Context) {
             try {
                 action.andThenCompose { takePicture -> takePicture.async().run() }
                     .andThenConsume { timestampedImageHandle ->
-                        try {
-                            val bitmap = convertToBitmap(timestampedImageHandle)
-                            if (bitmap == null) {
-                                working = false
-                                callback.onError("Failed to convert robot camera image")
-                                return@andThenConsume
-                            }
+                        if (timestampedImageHandle == null) {
+                            working = false
+                            callback.onError("No image received from robot camera")
+                            return@andThenConsume
+                        }
 
-                            // Optimize bitmap for API upload (smaller size, lower quality)
-                            val optimizedBitmap = optimizeBitmapForApi(bitmap)
-
-                            // Single compression for both cache file and Base64
-                            val jpegBytes: ByteArray
-                            ByteArrayOutputStream().use { baos ->
-                                optimizedBitmap?.compress(Bitmap.CompressFormat.JPEG, 75, baos)
-                                jpegBytes = baos.toByteArray()
-                            }
-
-                            // Save to cache file (async, non-blocking)
-                            serviceScope.launch {
-                                try {
-                                    val out = File(context.cacheDir, "vision_${System.currentTimeMillis()}.jpg")
-                                    FileOutputStream(out).use { fos ->
-                                        fos.write(jpegBytes)
-                                    }
-                                    callback.onPhotoCaptured(out.absolutePath)
-                                } catch (e: Exception) {
-                                    Log.w(TAG, "Failed to save preview file", e)
+                        // Offload heavy image decoding, JPEG compression, and network I/O to background coroutine
+                        serviceScope.launch {
+                            try {
+                                val bitmap = convertToBitmap(timestampedImageHandle)
+                                if (bitmap == null) {
+                                    working = false
+                                    callback.onError("Failed to convert robot camera image")
+                                    return@launch
                                 }
-                            }
 
-                            // Convert to Base64 once (reuse for GA direct image or Groq text analysis)
-                            val base64 = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
+                                // Optimize bitmap for API upload (smaller size, lower quality)
+                                val optimizedBitmap = optimizeBitmapForApi(bitmap)
 
-                            // Decide path: if Realtime API is active (OpenAI or Google), send image directly via WS
-                            val useRealtimeImagePath = shouldSendImageDirectToRealtime()
-                            if (useRealtimeImagePath) {
+                                // Single compression for both cache file and Base64
+                                val jpegBytes: ByteArray
+                                ByteArrayOutputStream().use { baos ->
+                                    optimizedBitmap?.compress(Bitmap.CompressFormat.JPEG, 75, baos)
+                                    jpegBytes = baos.toByteArray()
+                                }
+
+                                // Explicitly recycle bitmaps to prevent memory leaks on Android 6.0 Dalvik heap
+                                if (optimizedBitmap != null && optimizedBitmap != bitmap) {
+                                    bitmap.recycle()
+                                    optimizedBitmap.recycle()
+                                } else {
+                                    bitmap.recycle()
+                                }
+
+                                // Save to cache file (async, non-blocking)
                                 serviceScope.launch {
+                                    try {
+                                        val out = File(context.cacheDir, "vision_${System.currentTimeMillis()}.jpg")
+                                        FileOutputStream(out).use { fos ->
+                                            fos.write(jpegBytes)
+                                        }
+                                        callback.onPhotoCaptured(out.absolutePath)
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "Failed to save preview file", e)
+                                    }
+                                }
+
+                                // Convert to Base64 once (reuse for GA direct image or Groq text analysis)
+                                val base64 = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
+
+                                // Decide path: if Realtime API is active (OpenAI or Google), send image directly via WS
+                                val useRealtimeImagePath = shouldSendImageDirectToRealtime()
+                                if (useRealtimeImagePath) {
                                     try {
                                         val activity = activityRef
                                             ?: throw IllegalStateException("Activity reference not available")
@@ -175,17 +222,15 @@ class VisionService(context: Context) {
                                         Log.e(TAG, "Failed to send image to realtime API, falling back to Groq", e)
                                         analyzeWithGroq(base64, prompt, apiKey, callback)
                                     }
-                                }
-                            } else {
-                                // Offload network analysis to coroutine (Groq path)
-                                serviceScope.launch {
+                                } else {
+                                    // Offload network analysis (Groq path)
                                     analyzeWithGroq(base64, prompt, apiKey, callback)
                                 }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error processing robot camera image", e)
+                                working = false
+                                callback.onError("Failed processing robot camera image: ${e.message}")
                             }
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Error processing robot camera image", e)
-                            working = false
-                            callback.onError("Failed processing robot camera image: ${e.message}")
                         }
                     }
             } catch (e: Exception) {

@@ -449,6 +449,12 @@ class ChatActivity : AppCompatActivity(), ToolHost {
         viewModel.addImageMessage(imagePath)
     }
 
+    override fun addTextMessage(text: String, sender: ChatMessage.Sender) {
+        runOnUiThread {
+            viewModel.addMessage(ChatMessage(text, sender))
+        }
+    }
+
     override fun onRequestPermissionsResult(
         requestCode: Int,
         permissions: Array<String>,

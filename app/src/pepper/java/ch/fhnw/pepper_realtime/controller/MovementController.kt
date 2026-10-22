@@ -81,20 +81,22 @@ class MovementController {
             }
 
             // Execute movement
-            currentMovement = goTo.async().run()
+            val moveRun = goTo.async().run()
+            currentMovement = moveRun
 
             // Set up timeout
-            timeoutExecutor.schedule({
-                currentMovement?.let { movement ->
-                    if (!movement.isDone) {
-                        Log.w(TAG, "Movement timeout after $MOVEMENT_TIMEOUT_SECONDS seconds - cancelling")
-                        movement.requestCancellation()
-                        listener?.onMovementFinished(false, "Movement timeout - the robot took too long to reach the destination, possibly due to obstacles")
-                    }
+            currentTimeoutTask?.cancel(false)
+            currentTimeoutTask = timeoutExecutor.schedule({
+                if (!moveRun.isDone) {
+                    Log.w(TAG, "Movement timeout after $MOVEMENT_TIMEOUT_SECONDS seconds - cancelling")
+                    moveRun.requestCancellation()
+                    listener?.onMovementFinished(false, "Movement timeout - the robot took too long to reach the destination, possibly due to obstacles")
                 }
             }, MOVEMENT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
 
-            currentMovement?.thenConsume { future ->
+            moveRun.thenConsume { future ->
+                currentTimeoutTask?.cancel(false)
+                currentTimeoutTask = null
                 goTo.removeAllOnStartedListeners()
 
                 when {
@@ -112,6 +114,7 @@ class MovementController {
                         listener?.onMovementFinished(false, errorMsg)
                     }
                 }
+                currentMovement = null
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error creating movement", e)
@@ -168,20 +171,22 @@ class MovementController {
             }
 
             // Execute turn
-            currentMovement = goTo.async().run()
+            val turnRun = goTo.async().run()
+            currentMovement = turnRun
 
             // Set up timeout
-            timeoutExecutor.schedule({
-                currentMovement?.let { movement ->
-                    if (!movement.isDone) {
-                        Log.w(TAG, "Turn timeout after $MOVEMENT_TIMEOUT_SECONDS seconds - cancelling")
-                        movement.requestCancellation()
-                        listener?.onMovementFinished(false, "Turn timeout - the robot took too long to complete the turn, possibly due to obstacles")
-                    }
+            currentTimeoutTask?.cancel(false)
+            currentTimeoutTask = timeoutExecutor.schedule({
+                if (!turnRun.isDone) {
+                    Log.w(TAG, "Turn timeout after $MOVEMENT_TIMEOUT_SECONDS seconds - cancelling")
+                    turnRun.requestCancellation()
+                    listener?.onMovementFinished(false, "Turn timeout - the robot took too long to complete the turn, possibly due to obstacles")
                 }
             }, MOVEMENT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
 
-            currentMovement?.thenConsume { future ->
+            turnRun.thenConsume { future ->
+                currentTimeoutTask?.cancel(false)
+                currentTimeoutTask = null
                 goTo.removeAllOnStartedListeners()
 
                 when {
@@ -199,6 +204,7 @@ class MovementController {
                         listener?.onMovementFinished(false, errorMsg)
                     }
                 }
+                currentMovement = null
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error creating turn", e)

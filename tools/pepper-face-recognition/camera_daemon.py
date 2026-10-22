@@ -9,17 +9,19 @@ Provides synchronized frames via HTTP endpoint.
 Performance optimizations:
 - No subscribe/unsubscribe overhead per frame
 - YUV422 native colorspace for RGB (fastest)
-- Synchronized RGB + Depth + Head Angles
-- Minimal latency (~30ms vs ~200ms)
+- Synchronized RGB + Depth + Head Angles via Threading & Timestamp Matching
+- Minimal latency (~15-20ms vs ~200ms)
 
 Usage:
     PYTHONPATH=/opt/aldebaran/lib/python2.7/site-packages python2 camera_daemon.py
 
 HTTP Endpoints (port 5050):
-    GET /frame       - Get synchronized RGB + Depth + Head Angles
+    GET /frame       - Get synchronized RGB + Head Angles
     GET /rgb         - Get RGB frame only
-    GET /depth       - Get Depth frame only
     GET /status      - Get daemon status
+    GET /set_resolution?res=N - Set camera resolution (0=QQVGA, 1=QVGA, 2=VGA)
+    GET /pause_awareness  - Pause head movements (for face registration)
+    GET /resume_awareness - Resume head movements
     GET /shutdown    - Shutdown daemon gracefully
 """
 
@@ -30,12 +32,21 @@ import math
 import time
 import base64
 import threading
+import mmap
+import os
 import struct
+import signal
+from collections import deque
 
 sys.path.insert(0, '/opt/aldebaran/lib/python2.7/site-packages')
 
 # HTTP server imports
 from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
+from SocketServer import ThreadingMixIn
+
+class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
 
 PORT = 5050
 
@@ -43,41 +54,157 @@ PORT = 5050
 session = None
 video = None
 memory = None
+awareness = None  # ALBasicAwareness for pausing head movements
 rgb_subscriber = None
 depth_subscriber = None
 running = True
 lock = threading.Lock()
-
-# Cached latest frames (written by background capture threads)
-rgb_cache_meta = None
-rgb_cache_raw = ""
-rgb_cache_ts = 0.0
-
-depth_cache_meta = None
-depth_cache_raw = ""
-depth_cache_ts = 0.0
-
-rgb_thread = None
-depth_thread = None
+awareness_paused = False
 
 # Camera settings
-# RGB: Camera 0 (Top), Resolution 1 (QVGA 320x240), ColorSpace 11 (RGB), FPS 15
-# Note: ColorSpace 11 = kRGBColorSpace (3 bytes/pixel) - same as working capture script
+# RGB: Camera 0 (Top), ColorSpace 13 (BGR), FPS 15
+# Resolution: 0=QQVGA(160x120), 1=QVGA(320x240), 2=VGA(640x480)
 RGB_CAMERA = 0      # Top camera
-RGB_RESOLUTION = 1  # QVGA (320x240)
-RGB_COLORSPACE = 11  # kRGBColorSpace (3 bytes/pixel) - matches working capture
+RGB_RESOLUTION = 2  # Default: VGA (640x480) - Fixed for Hybrid Detection
+RGB_COLORSPACE = 13  # kBGRColorSpace (3 bytes/pixel)
 RGB_FPS = 15
 
-# Depth: Camera 2, Resolution 1 (QQVGA 160x120), ColorSpace 17 (Depth), FPS 10
-DEPTH_CAMERA = 2    # Depth camera
-DEPTH_RESOLUTION = 1  # QQVGA (160x120 or 160x90)
-DEPTH_COLORSPACE = 17  # Depth
-DEPTH_FPS = 10
+# Resolution names for logging
+RESOLUTION_NAMES = {0: "QQVGA(160x120)", 1: "QVGA(320x240)", 2: "VGA(640x480)"}
 
+# Shared Memory settings
+SHM_PATH = "/dev/shm/pepper_shm"
+SHM_SIZE = 4 * 1024 * 1024  # 4MB
+
+class SharedMemoryManager(object):
+    def __init__(self):
+        self.f = None
+        self.m = None
+        self.seq_id = 0
+        self.setup()
+        
+    def setup(self):
+        try:
+            # Open file for SHM
+            self.f = open(SHM_PATH, "w+b")
+            # Resize to SHM_SIZE
+            self.f.seek(SHM_SIZE - 1)
+            self.f.write(b'\0')
+            self.f.flush()
+            # Map memory
+            self.m = mmap.mmap(self.f.fileno(), SHM_SIZE)
+            print("[Daemon] Shared Memory initialized at {}".format(SHM_PATH))
+        except Exception as e:
+            print("[Daemon] Failed to init SHM: {}".format(e))
+            
+    def write(self, head, rgb):
+        if not self.m:
+            return
+            
+        try:
+            # Prepare data
+            head_json = json.dumps(head) if head else "{}"
+            head_bytes = head_json.encode('utf-8')
+            
+            rgb_bytes = rgb['data'] if rgb else b""
+            rgb_w = rgb['width'] if rgb else 0
+            rgb_h = rgb['height'] if rgb else 0
+            rgb_len = len(rgb_bytes)
+            
+            head_len = len(head_bytes)
+            
+            # Check size
+            total_size = 64 + head_len + rgb_len
+            if total_size > SHM_SIZE:
+                print("[Daemon] SHM Overflow! Needed {} bytes".format(total_size))
+                return
+
+            self.seq_id += 1
+            timestamp = time.time()
+            
+            # Write Header (64 bytes fixed)
+            # Magic(4), Seq(4), Ts(8), RGB_W(4), RGB_H(4), RGB_L(4), Head_L(4)
+            # Format: < (little endian), 4s (4 chars), I (uint), d (double), 4 * I (uint)
+            header = struct.pack("<4sIdIIII", 
+                b"PSHM", self.seq_id, timestamp,
+                rgb_w, rgb_h, rgb_len,
+                head_len
+            )
+            
+            # Write everything in one go (seek 0)
+            self.m.seek(0)
+            self.m.write(header)
+            # Padding to 64 bytes
+            self.m.seek(64)
+            self.m.write(head_bytes)
+            self.m.write(rgb_bytes)
+            
+        except Exception as e:
+            print("[Daemon] SHM Write Error: {}".format(e))
+            try:
+                self.m.close()
+                self.f.close()
+                self.setup()
+            except:
+                pass
+
+    def cleanup(self):
+        if self.m:
+            self.m.close()
+        if self.f:
+            self.f.close()
+        try:
+            os.remove(SHM_PATH)
+        except:
+            pass
+
+shm_manager = SharedMemoryManager()
+
+# Top Camera Z: 0.1631m, Depth Camera Z: 0.1194m -> Delta Z = 0.0437m
+# Top Camera X: 0.0868m, Depth Camera X: 0.05138m -> Delta X = 0.03542m
+CAM_OFFSETS = {
+    "dx": 0.03542,
+    "dy": 0.00000,
+    "dz": 0.04370
+}
+
+# Background Polling
+class PollingThread(threading.Thread):
+    def __init__(self):
+        threading.Thread.__init__(self)
+        self.daemon = True
+        self.last_frame = None
+        
+    def run(self):
+        print("[Daemon] Polling thread started")
+        while running:
+            try:
+                # Fetch synchronized frame
+                frame_data = get_synchronized_frame_internal()
+                
+                # Ensure frame data and RGB image are valid before updating
+                if frame_data and frame_data.get('rgb'):
+                    self.last_frame = frame_data
+                    
+                    # Push to Shared Memory
+                    shm_manager.write(
+                        frame_data['head'],
+                        frame_data['rgb']
+                    )
+                
+                # Sleep ~30ms (~33Hz polling) to comfortably capture 15 FPS without CPU hogging
+                time.sleep(0.03)
+                
+            except Exception as e:
+                # Cleanly handle dropped frames or transient capture errors without crashing
+                print("[Daemon] Polling frame skipped / error: {}".format(e))
+                time.sleep(0.02)
+
+polling_thread = None
 
 def init_naoqi():
     """Initialize NAOqi connection and subscribe to cameras."""
-    global session, video, memory, rgb_subscriber, depth_subscriber
+    global session, video, memory, awareness, rgb_subscriber, polling_thread
     
     import qi
     session = qi.Session()
@@ -85,6 +212,14 @@ def init_naoqi():
     
     video = session.service("ALVideoDevice")
     memory = session.service("ALMemory")
+    
+    # Initialize BasicAwareness for pausing head movements during registration
+    try:
+        awareness = session.service("ALBasicAwareness")
+        print("[Daemon] ALBasicAwareness available")
+    except Exception as e:
+        print("[Daemon] ALBasicAwareness not available: {}".format(e))
+        awareness = None
     
     # Subscribe to RGB camera (persistent)
     rgb_subscriber = video.subscribeCamera(
@@ -96,82 +231,81 @@ def init_naoqi():
     )
     print("[Daemon] RGB camera subscribed: {}".format(rgb_subscriber))
     
-    # Subscribe to Depth camera (persistent)
-    depth_subscriber = video.subscribeCamera(
-        "perception_depth",
-        DEPTH_CAMERA,
-        DEPTH_RESOLUTION,
-        DEPTH_COLORSPACE,
-        DEPTH_FPS
-    )
-    print("[Daemon] Depth camera subscribed: {}".format(depth_subscriber))
+    # Start polling thread
+    polling_thread = PollingThread()
+    polling_thread.start()
     
     return True
 
 
-def _capture_rgb_loop():
-    """Continuously capture RGB frames into cache (so HTTP handlers are cheap)."""
-    global rgb_cache_meta, rgb_cache_raw, rgb_cache_ts
-    interval = 1.0 / float(RGB_FPS) if RGB_FPS else 0.1
-    while running:
-        try:
-            res = get_rgb_frame_raw()
-            if res:
-                meta, raw_bytes = res
-                with lock:
-                    rgb_cache_meta = meta
-                    rgb_cache_raw = raw_bytes
-                    rgb_cache_ts = time.time()
-        except Exception as e:
-            print("[Daemon] RGB capture loop error: {}".format(e))
-        time.sleep(interval)
-
-
-def _capture_depth_loop():
-    """Continuously capture Depth frames into cache."""
-    global depth_cache_meta, depth_cache_raw, depth_cache_ts
-    interval = 1.0 / float(DEPTH_FPS) if DEPTH_FPS else 0.1
-    while running:
-        try:
-            res = get_depth_frame_raw()
-            if res:
-                meta, raw_bytes = res
-                with lock:
-                    depth_cache_meta = meta
-                    depth_cache_raw = raw_bytes
-                    depth_cache_ts = time.time()
-        except Exception as e:
-            print("[Daemon] Depth capture loop error: {}".format(e))
-        time.sleep(interval)
-
-
-def start_capture_threads():
-    """Start background capture threads."""
-    global rgb_thread, depth_thread
-    if rgb_thread is None or not rgb_thread.is_alive():
-        rgb_thread = threading.Thread(target=_capture_rgb_loop)
-        rgb_thread.daemon = True
-        rgb_thread.start()
-    if depth_thread is None or not depth_thread.is_alive():
-        depth_thread = threading.Thread(target=_capture_depth_loop)
-        depth_thread.daemon = True
-        depth_thread.start()
-
 
 def cleanup_naoqi():
     """Unsubscribe from cameras and cleanup."""
-    global video, rgb_subscriber, depth_subscriber
+    global video, rgb_subscriber
     
     if video:
         try:
             if rgb_subscriber:
                 video.unsubscribe(rgb_subscriber)
                 print("[Daemon] RGB camera unsubscribed")
-            if depth_subscriber:
-                video.unsubscribe(depth_subscriber)
-                print("[Daemon] Depth camera unsubscribed")
         except Exception as e:
             print("[Daemon] Cleanup error: {}".format(e))
+
+
+def set_camera_resolution(new_resolution):
+    """
+    Deprecated: Camera resolution is now fixed to VGA (2).
+    This function now just logs the request but does not change hardware settings.
+    Detection resolution is handled in face_recognition_server.py via downscaling.
+    """
+    if new_resolution not in [0, 1, 2]:
+        print("[Daemon] Invalid resolution: {}".format(new_resolution))
+        return False
+    
+    # We ignore the request to change actual camera resolution
+    # because we always want VGA for high-quality recognition.
+    print("[Daemon] Ignoring resolution change to {} (Fixed to VGA)".format(
+        RESOLUTION_NAMES.get(new_resolution, str(new_resolution))
+    ))
+    return True
+
+
+def pause_awareness():
+    """Pause ALBasicAwareness to stop head movements during registration."""
+    global awareness_paused
+    
+    if awareness is None:
+        print("[Daemon] Awareness not available, cannot pause")
+        return False
+    
+    try:
+        awareness.pauseAwareness()
+        awareness_paused = True
+        print("[Daemon] Awareness paused - head movements stopped")
+        return True
+    except Exception as e:
+        print("[Daemon] Failed to pause awareness: {}".format(e))
+        return False
+
+
+def resume_awareness():
+    """Resume ALBasicAwareness after registration."""
+    global awareness_paused
+    
+    if awareness is None:
+        return False
+    
+    if not awareness_paused:
+        return True  # Already running
+    
+    try:
+        awareness.resumeAwareness()
+        awareness_paused = False
+        print("[Daemon] Awareness resumed - head movements enabled")
+        return True
+    except Exception as e:
+        print("[Daemon] Failed to resume awareness: {}".format(e))
+        return False
 
 
 def get_head_angles():
@@ -180,22 +314,30 @@ def get_head_angles():
         return None
     
     try:
-        head_yaw_rad = memory.getData("Device/SubDeviceList/HeadYaw/Position/Sensor/Value")
-        head_pitch_rad = memory.getData("Device/SubDeviceList/HeadPitch/Position/Sensor/Value")
+        try:
+            angles = memory.getListData([
+                "Device/SubDeviceList/HeadYaw/Position/Sensor/Value",
+                "Device/SubDeviceList/HeadPitch/Position/Sensor/Value"
+            ])
+            head_yaw_rad, head_pitch_rad = angles[0], angles[1]
+        except Exception:
+            head_yaw_rad = memory.getData("Device/SubDeviceList/HeadYaw/Position/Sensor/Value")
+            head_pitch_rad = memory.getData("Device/SubDeviceList/HeadPitch/Position/Sensor/Value")
         
         return {
             "head_yaw": math.degrees(head_yaw_rad),
             "head_pitch": math.degrees(head_pitch_rad),
             "head_yaw_rad": head_yaw_rad,
-            "head_pitch_rad": head_pitch_rad
+            "head_pitch_rad": head_pitch_rad,
+            "camera_offsets": CAM_OFFSETS
         }
     except Exception as e:
         print("[Daemon] Head angles error: {}".format(e))
         return None
 
 
-def get_rgb_frame_raw():
-    """Get current RGB frame (raw bytes, no base64)."""
+def get_rgb_frame(raw_data=False):
+    """Get current RGB frame."""
     if not video or not rgb_subscriber:
         return None
     
@@ -211,159 +353,80 @@ def get_rgb_frame_raw():
         timestamp_s = image[4]
         timestamp_us = image[5]
         data = image[6]
-        raw_bytes = str(data) if data else ""
         
-        meta = {
+        # Return raw data if requested
+        if raw_data:
+            return {
+                "width": width,
+                "height": height,
+                "layers": layers,
+                "colorspace": colorspace,
+                "timestamp": timestamp_s + timestamp_us / 1000000.0,
+                "data": str(data) if data else ""
+            }
+        
+        # Base64 encode the raw data
+        data_b64 = base64.b64encode(str(data)) if data else ""
+        
+        return {
             "width": width,
             "height": height,
             "layers": layers,
-            "colorspace": colorspace,  # 11 = RGB
+            "colorspace": colorspace,  # 0 = YUV422
             "timestamp": timestamp_s + timestamp_us / 1000000.0,
+            "data": data_b64
         }
-        return (meta, raw_bytes)
     except Exception as e:
         print("[Daemon] RGB frame error: {}".format(e))
         return None
 
 
-def get_rgb_frame_json():
-    """Get RGB frame as JSON payload (base64-encoded data)."""
-    res = get_rgb_frame_raw()
-    if not res:
-        return None
-    meta, raw_bytes = res
-    meta["data"] = base64.b64encode(raw_bytes) if raw_bytes else ""
-    return meta
+def get_depth_frame(raw_data=False):
+    """Deprecated: Depth removed for performance."""
+    return None
 
 
-def get_depth_frame_raw():
-    """Get current Depth frame (raw bytes, no base64)."""
-    if not video or not depth_subscriber:
-        return None
-    
+def fetch_frame_threaded(func, result_container, key, raw_data):
+    """Helper to run frame fetch in thread."""
     try:
-        image = video.getImageRemote(depth_subscriber)
-        if image is None:
-            return None
-        
-        width = image[0]
-        height = image[1]
-        timestamp_s = image[4]
-        timestamp_us = image[5]
-        data = image[6]
-        raw_bytes = str(data) if data else ""
-        meta = {
-            "width": width,
-            "height": height,
-            "timestamp": timestamp_s + timestamp_us / 1000000.0,
-        }
-        return (meta, raw_bytes)
+        res = func(raw_data=raw_data)
+        result_container[key] = res
     except Exception as e:
-        print("[Daemon] Depth frame error: {}".format(e))
-        return None
+        print("[Daemon] Thread error fetching {}: {}".format(key, e))
+        result_container[key] = None
 
 
-def get_depth_frame_json():
-    """Get Depth frame as JSON payload (base64-encoded data)."""
-    res = get_depth_frame_raw()
-    if not res:
-        return None
-    meta, raw_bytes = res
-    meta["data"] = base64.b64encode(raw_bytes) if raw_bytes else ""
-    return meta
-
-
-def get_synchronized_frame_json():
-    """Get synchronized RGB + Depth + Head Angles (JSON/base64)."""
-    # Use cached frames (fast). Head angles are read on-demand.
-    start = time.time()
-    head = get_head_angles()
-    with lock:
-        rgb_meta = rgb_cache_meta
-        rgb_raw = rgb_cache_raw
-        depth_meta = depth_cache_meta
-        depth_raw = depth_cache_raw
-    rgb = None
-    depth = None
-    if rgb_meta is not None:
-        rgb = dict(rgb_meta)
-        rgb["data"] = base64.b64encode(rgb_raw) if rgb_raw else ""
-    if depth_meta is not None:
-        depth = dict(depth_meta)
-        depth["data"] = base64.b64encode(depth_raw) if depth_raw else ""
-    capture_time = (time.time() - start) * 1000  # ms
-    return {
-        "head": head,
-        "rgb": rgb,
-        "depth": depth,
-        "capture_ms": capture_time,
-        "timestamp": time.time()
-    }
-
-
-def get_synchronized_frame_raw():
-    """Get synchronized head + (rgb meta/raw) + (depth meta/raw) with no base64."""
-    start = time.time()
-    head = get_head_angles() or {}
-    with lock:
-        rgb_meta = rgb_cache_meta
-        rgb_raw = rgb_cache_raw
-        depth_meta = depth_cache_meta
-        depth_raw = depth_cache_raw
-    rgb_res = (rgb_meta, rgb_raw) if rgb_meta is not None else None
-    depth_res = (depth_meta, depth_raw) if depth_meta is not None else None
-    capture_time = (time.time() - start) * 1000  # ms
-    return head, rgb_res, depth_res, capture_time
-
-
-def build_frame_bin():
+def get_synchronized_frame_internal():
     """
-    Build a binary payload for a synchronized frame.
-
-    Format (little-endian):
-      magic      : 4s   = b'PFR1'
-      head_len   : I
-      rgb_w      : H
-      rgb_h      : H
-      rgb_len    : I
-      depth_w    : H
-      depth_h    : H
-      depth_len  : I
-    Followed by:
-      head_json bytes (utf-8)
-      rgb bytes (raw RGB, colorspace=11, len=rgb_w*rgb_h*3)
-      depth bytes (raw depth payload as provided by NAOqi)
+    Internal version: Get synchronized RGB + Head Angles.
     """
-    head, rgb_res, depth_res, _capture_ms = get_synchronized_frame_raw()
+    with lock:
+        start = time.time()
+        
+        # Fetch RGB
+        # No need for threads if we only fetch one image
+        rgb = get_rgb_frame(raw_data=True)
+        head = get_head_angles()
+        
+        capture_time = (time.time() - start) * 1000  # ms
+        
+        return {
+            "head": head,
+            "rgb": rgb,
+            "capture_ms": capture_time,
+            "timestamp": time.time()
+        }
 
-    rgb_meta, rgb_raw = rgb_res if rgb_res else ({}, "")
-    depth_meta, depth_raw = depth_res if depth_res else ({}, "")
 
-    head_json = json.dumps(head or {})
-    # Python2: json.dumps returns 'str' (bytes). Python3: returns 'str' (unicode).
-    try:
-        head_bytes = head_json if isinstance(head_json, str) else head_json.encode("utf-8")
-    except Exception:
-        head_bytes = head_json.encode("utf-8")
-
-    rgb_w = int(rgb_meta.get("width") or 0)
-    rgb_h = int(rgb_meta.get("height") or 0)
-
-    depth_w = int(depth_meta.get("width") or 0)
-    depth_h = int(depth_meta.get("height") or 0)
-
-    header = struct.pack(
-        "<4sIHHIHHI",
-        "PFR1",
-        len(head_bytes),
-        rgb_w,
-        rgb_h,
-        len(rgb_raw),
-        depth_w,
-        depth_h,
-        len(depth_raw),
-    )
-    return header + head_bytes + rgb_raw + depth_raw
+def get_synchronized_frame():
+    """
+    Public API: Returns the latest cached frame from PollingThread if available.
+    """
+    if polling_thread and polling_thread.last_frame:
+        return polling_thread.last_frame
+    
+    # Fallback to direct fetch if thread not ready
+    return get_synchronized_frame_internal()
 
 
 class CameraHandler(BaseHTTPRequestHandler):
@@ -379,32 +442,75 @@ class CameraHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps(data))
     
+    def send_binary(self, data, code=200):
+        self.send_response(code)
+        self.send_header('Content-Type', 'application/octet-stream')
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def do_GET(self):
         global running
         
-        if self.path == '/frame':
-            # Synchronized RGB + Depth + Head Angles
-            frame = get_synchronized_frame_json()
+        if self.path == '/frame_bin':
+            # Optimized binary frame endpoint WITH THREADING & SYNC
+            import struct
+            
+            try:
+                # Use internal sync logic
+                frame = get_synchronized_frame()
+                
+                head = frame.get('head')
+                rgb = frame.get('rgb')
+                
+                head_json = json.dumps(head) if head else "{}"
+                head_len = len(head_json)
+                
+                rgb_data = ""
+                rgb_w = 0
+                rgb_h = 0
+                if rgb and rgb.get('data'):
+                    rgb_data = rgb['data']
+                    rgb_w = rgb['width']
+                    rgb_h = rgb['height']
+                rgb_len = len(rgb_data)
+                
+                # Pack header (No depth)
+                # Format: <4sIHHII (Magic, HeadL, RGBW, RGBH, RGBL, Reserved=0) - Keep 24 bytes?
+                # Original was <4sIHHIHHI (24 bytes).
+                # To maintain compatibility with unknown clients, we could send 0s for depth.
+                # But this endpoint is only used by our server.
+                # Let's match new SHM struct-like format or just keep simple binary.
+                
+                # We'll use a simpler binary format here matching what the new Server expects via HTTP fallback
+                # Magic(4) + HeadL(4) + RGBW(2) + RGBH(2) + RGBL(4) = 16 Bytes
+                # NOTE: The server HTTP fallback must match this!
+                header = struct.pack("<4sIHHI", "PFR2", head_len, rgb_w, rgb_h, rgb_len)
+                
+                # Send everything as one binary blob
+                self.send_binary(header + head_json + rgb_data)
+                
+            except Exception as e:
+                print("[Daemon] Binary endpoint error: {}".format(e))
+                self.send_error(500, str(e))
+            
+        elif self.path == '/frame':
+            # Synchronized RGB + Head Angles
+            frame = get_synchronized_frame()
+            # frame['rgb']['data'] is raw bytes, we need base64 for JSON
+            if frame.get('rgb'):
+                frame['rgb']['data'] = base64.b64encode(frame['rgb']['data'])
             self.send_json(frame)
-        
-        elif self.path == '/frame_bin':
-            # Synchronized frame as binary payload (fast path)
-            payload = build_frame_bin()
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/octet-stream')
-            self.send_header('Content-Length', str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
             
         elif self.path == '/rgb':
-            # RGB only
-            rgb = get_rgb_frame_json()
+            # RGB only (protected by lock against concurrent subscriber access)
+            with lock:
+                rgb = get_rgb_frame()
             self.send_json({"rgb": rgb, "timestamp": time.time()})
             
         elif self.path == '/depth':
-            # Depth only
-            depth = get_depth_frame_json()
-            self.send_json({"depth": depth, "timestamp": time.time()})
+            # Depth removed
+            self.send_json({"error": "Depth disabled"}, 404)
             
         elif self.path == '/head':
             # Head angles only
@@ -416,9 +522,47 @@ class CameraHandler(BaseHTTPRequestHandler):
                 "status": "running",
                 "rgb_subscriber": rgb_subscriber,
                 "depth_subscriber": depth_subscriber,
-                "rgb_colorspace": "RGB",
-                "timestamp": time.time()
+                "rgb_resolution": RGB_RESOLUTION,
+                "rgb_resolution_name": RESOLUTION_NAMES.get(RGB_RESOLUTION, "unknown"),
+                "rgb_colorspace": "BGR",
+                "timestamp": time.time(),
+                "offsets": CAM_OFFSETS
             })
+            
+        elif self.path.startswith('/set_resolution'):
+            # Parse resolution from query string: /set_resolution?res=1
+            res = 1  # Default
+            if '?' in self.path:
+                query = self.path.split('?')[1]
+                for param in query.split('&'):
+                    if param.startswith('res='):
+                        try:
+                            res = int(param.split('=')[1])
+                        except:
+                            pass
+            
+            if set_camera_resolution(res):
+                self.send_json({
+                    "status": "ok",
+                    "resolution": res,
+                    "resolution_name": RESOLUTION_NAMES.get(res, "unknown")
+                })
+            else:
+                self.send_json({"error": "Failed to set resolution"}, 500)
+            
+        elif self.path == '/pause_awareness':
+            # Pause head movements for registration
+            if pause_awareness():
+                self.send_json({"status": "paused"})
+            else:
+                self.send_json({"error": "Failed to pause awareness"}, 500)
+        
+        elif self.path == '/resume_awareness':
+            # Resume head movements after registration
+            if resume_awareness():
+                self.send_json({"status": "resumed"})
+            else:
+                self.send_json({"error": "Failed to resume awareness"}, 500)
             
         elif self.path == '/shutdown':
             running = False
@@ -429,14 +573,14 @@ class CameraHandler(BaseHTTPRequestHandler):
 
 
 def run_server():
-    """Run the HTTP server."""
+    """Run the threaded HTTP server."""
     global running
     
-    server = HTTPServer(('127.0.0.1', PORT), CameraHandler)
+    server = ThreadedHTTPServer(('127.0.0.1', PORT), CameraHandler)
     server.timeout = 1.0  # Allow checking running flag
     
     print("[Daemon] Camera daemon running on port {}".format(PORT))
-    print("[Daemon] Endpoints: /frame, /frame_bin, /rgb, /depth, /head, /status, /shutdown")
+    print("[Daemon] Endpoints: /frame_bin, /frame, /status, /set_resolution?res=N, /shutdown")
     
     while running:
         server.handle_request()
@@ -444,8 +588,20 @@ def run_server():
     print("[Daemon] Server stopped")
 
 
+def sigterm_handler(signum, frame):
+    global running
+    print("\n[Daemon] Received signal {}, shutting down cleanly...".format(signum))
+    running = False
+    cleanup_naoqi()
+    shm_manager.cleanup()
+    sys.exit(0)
+
+
 def main():
     global running
+    
+    # Handle SIGTERM gracefully to unsubscribe from cameras and clean up SHM
+    signal.signal(signal.SIGTERM, sigterm_handler)
     
     print("[Daemon] Starting Camera Daemon...")
     
@@ -453,9 +609,6 @@ def main():
         if not init_naoqi():
             print("[Daemon] Failed to initialize NAOqi")
             sys.exit(1)
-
-        # Start background capture threads (major latency reduction for HTTP endpoints)
-        start_capture_threads()
         
         run_server()
         
@@ -464,10 +617,11 @@ def main():
     except Exception as e:
         print("[Daemon] Error: {}".format(e))
     finally:
+        running = False
         cleanup_naoqi()
+        shm_manager.cleanup()
         print("[Daemon] Daemon stopped")
 
 
 if __name__ == "__main__":
     main()
-

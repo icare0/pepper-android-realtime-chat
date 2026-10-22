@@ -63,11 +63,63 @@ class GestureController {
     }
 
     /**
+     * Simulates entering listening state
+     */
+    @Suppress("UNUSED_PARAMETER")
+    fun onEnterListening(robotContext: Any?) {
+        Log.d(TAG, "🤖 [SIMULATED] GestureController entered LISTENING state")
+    }
+
+    /**
+     * Simulates entering thinking state
+     */
+    @Suppress("UNUSED_PARAMETER")
+    fun onEnterThinking(robotContext: Any?) {
+        Log.d(TAG, "🤖 [SIMULATED] GestureController entered THINKING state")
+    }
+
+    /**
+     * Simulates stopping thinking state
+     */
+    fun stopThinking() {
+        Log.d(TAG, "🤖 [SIMULATED] GestureController stopped THINKING state")
+    }
+
+    /**
+     * Simulates exiting speaking with grace period
+     */
+    fun onExitSpeaking() {
+        Log.i(TAG, "🤖 [SIMULATED] GestureController exited SPEAKING state (grace period active)")
+        stopNow(immediateReset = false)
+    }
+
+    /**
+     * Simulates scheduling safe posture reset
+     */
+    fun scheduleResetToSafePosture(delayMs: Long = 2000L) {
+        Log.d(TAG, "🤖 [SIMULATED] Scheduled safe posture reset in ${delayMs}ms")
+    }
+
+    /**
+     * Simulates cancelling pending safe posture reset
+     */
+    fun cancelPendingSafePostureReset() {
+        Log.d(TAG, "🤖 [SIMULATED] Cancelled pending safe posture reset")
+    }
+
+    /**
      * Simulates stopping immediately
      */
-    fun stopNow() {
+    fun stopNow(immediateReset: Boolean = false) {
         running = false
-        Log.i(TAG, "🤖 [SIMULATED] GestureController stopped immediately")
+        Log.i(TAG, "🤖 [SIMULATED] GestureController stopped immediately (immediateReset=$immediateReset)")
+    }
+
+    /**
+     * Simulates resetting posture to safe position
+     */
+    fun resetToSafePosture() {
+        Log.i(TAG, "🤖 [SIMULATED] GestureController reset to safe posture")
     }
 
     /**

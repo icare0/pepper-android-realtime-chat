@@ -8,6 +8,7 @@ import ch.fhnw.pepper_realtime.manager.FaceManager
 import ch.fhnw.pepper_realtime.manager.MelodyManager
 import ch.fhnw.pepper_realtime.manager.MemoryGameManager
 import ch.fhnw.pepper_realtime.manager.NavigationManager
+import ch.fhnw.pepper_realtime.manager.PhotoboothManager
 import ch.fhnw.pepper_realtime.manager.QuizGameManager
 import ch.fhnw.pepper_realtime.manager.TicTacToeGameManager
 import ch.fhnw.pepper_realtime.service.EventRuleEngine
@@ -15,6 +16,7 @@ import ch.fhnw.pepper_realtime.service.LocalFaceRecognitionService
 import ch.fhnw.pepper_realtime.service.PerceptionWebSocketClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -71,6 +73,9 @@ class ChatViewModelTest {
     @Mock
     private lateinit var rulePersistence: ch.fhnw.pepper_realtime.data.RulePersistence
 
+    @Mock
+    private lateinit var photoboothManager: PhotoboothManager
+
     // Use real managers instead of mocks (they manage their own StateFlow)
     private val melodyManager = MelodyManager()
     private val navigationManager = NavigationManager()
@@ -86,6 +91,7 @@ class ChatViewModelTest {
 
         // Mock rulePersistence to return empty list
         whenever(rulePersistence.loadRules()).thenReturn(emptyList())
+        whenever(photoboothManager.state).thenReturn(MutableStateFlow(PhotoboothUiState()))
         
         // Create managers with mocked dependencies
         eventRulesManager = EventRulesManager(eventRuleEngine, rulePersistence)
@@ -103,7 +109,8 @@ class ChatViewModelTest {
             navigationManager = navigationManager,
             dashboardManager = dashboardManager,
             eventRulesManager = eventRulesManager,
-            faceManager = faceManager
+            faceManager = faceManager,
+            photoboothManager = photoboothManager
         )
     }
 

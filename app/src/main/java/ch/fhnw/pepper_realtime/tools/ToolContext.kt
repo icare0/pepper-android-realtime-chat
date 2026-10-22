@@ -96,9 +96,13 @@ class ToolContext(
      * Send message directly to Realtime API
      * @param message Message to send
      * @param requestResponse Whether to request a response from AI
+     * @param showInUi Whether to also display this update in the chat UI
      */
-    fun sendAsyncUpdate(message: String, requestResponse: Boolean) {
+    fun sendAsyncUpdate(message: String, requestResponse: Boolean, showInUi: Boolean = true) {
         _messageSender?.sendMessageToRealtimeAPI(message, requestResponse, true)
+        if (showInUi && hasUi()) {
+            _toolHost.addTextMessage(message, ch.fhnw.pepper_realtime.ui.ChatMessage.Sender.ROBOT)
+        }
     }
 
     /**

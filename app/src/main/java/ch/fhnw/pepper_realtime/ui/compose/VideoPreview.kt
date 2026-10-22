@@ -51,7 +51,7 @@ fun VideoPreview(
     var isMinimized by remember { mutableStateOf(false) }
 
     AnimatedVisibility(
-        visible = isVisible && frame != null && !isMinimized,
+        visible = isVisible && frame != null && !frame.isRecycled && !isMinimized,
         enter = fadeIn() + slideInVertically { -it },
         exit = fadeOut() + slideOutVertically { -it },
         modifier = modifier
@@ -69,7 +69,7 @@ fun VideoPreview(
                 .background(Color.Black)
                 .clickable { isMinimized = true }
         ) {
-            frame?.let { bitmap ->
+            frame?.takeIf { !it.isRecycled }?.let { bitmap ->
                 Image(
                     bitmap = bitmap.asImageBitmap(),
                     contentDescription = "Camera Preview",

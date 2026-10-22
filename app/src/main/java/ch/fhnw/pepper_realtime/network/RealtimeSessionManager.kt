@@ -321,13 +321,15 @@ class RealtimeSessionManager @Inject constructor() {
      */
     fun sendAudioChunk(base64Audio: String): Boolean {
         return try {
-            // Reuse StringBuilder - clear and rebuild payload
-            audioPayloadBuilder.setLength(0)
-            audioPayloadBuilder.append(AUDIO_PAYLOAD_PREFIX)
-            audioPayloadBuilder.append(base64Audio)
-            audioPayloadBuilder.append(AUDIO_PAYLOAD_SUFFIX)
-            
-            send(audioPayloadBuilder.toString())
+            // Reuse StringBuilder - clear and rebuild payload (synchronized for thread safety)
+            val payload = synchronized(audioPayloadBuilder) {
+                audioPayloadBuilder.setLength(0)
+                audioPayloadBuilder.append(AUDIO_PAYLOAD_PREFIX)
+                audioPayloadBuilder.append(base64Audio)
+                audioPayloadBuilder.append(AUDIO_PAYLOAD_SUFFIX)
+                audioPayloadBuilder.toString()
+            }
+            send(payload)
         } catch (e: Exception) {
             Log.e(TAG, "Error creating audio chunk payload", e)
             false
@@ -398,12 +400,14 @@ class RealtimeSessionManager @Inject constructor() {
      */
     fun sendGoogleAudioChunk(base64Audio: String): Boolean {
         return try {
-            audioPayloadBuilder.setLength(0)
-            audioPayloadBuilder.append(GOOGLE_AUDIO_PAYLOAD_PREFIX)
-            audioPayloadBuilder.append(base64Audio)
-            audioPayloadBuilder.append(GOOGLE_AUDIO_PAYLOAD_SUFFIX)
-            
-            send(audioPayloadBuilder.toString())
+            val payload = synchronized(audioPayloadBuilder) {
+                audioPayloadBuilder.setLength(0)
+                audioPayloadBuilder.append(GOOGLE_AUDIO_PAYLOAD_PREFIX)
+                audioPayloadBuilder.append(base64Audio)
+                audioPayloadBuilder.append(GOOGLE_AUDIO_PAYLOAD_SUFFIX)
+                audioPayloadBuilder.toString()
+            }
+            send(payload)
         } catch (e: Exception) {
             Log.e(TAG, "Error creating Google audio chunk payload", e)
             false

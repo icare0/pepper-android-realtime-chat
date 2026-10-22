@@ -116,4 +116,8 @@
     <string name="youtube_loading">Loading video…</string>
     <string name="youtube_close">Close Video</string>
 
+    <!-- Photobooth Strings -->
+    <string name="photobooth_title">Photobooth Conserto</string>
+    <string name="photobooth_content_desc">Ouvrir le Photobooth Conserto</string>
+
 </resources>
