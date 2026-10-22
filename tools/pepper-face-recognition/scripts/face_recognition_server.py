@@ -445,35 +445,22 @@ def get_synchronized_frame_http():
 
         blob = response.read()
 
-        # Binary protocol: Header (24 bytes) + HeadJSON + RGB + Depth
-        header_fmt = "<4sIHHIHHI"
+        # Binary protocol (camera_daemon.py /frame_bin, no depth):
+        # Magic "PFR2"(4) + HeadL(4) + RGBW(2) + RGBH(2) + RGBL(4) + HeadJSON + RGB
+        header_fmt = "<4sIHHI"
         header_size = struct.calcsize(header_fmt)
-        
-        magic, head_len, rgb_w, rgb_h, rgb_len, depth_w, depth_h, depth_len = struct.unpack(
+
+        magic, head_len, rgb_w, rgb_h, rgb_len = struct.unpack(
             header_fmt, blob[:header_size]
         )
-        
-        if magic != b"PFR1":
+
+        if magic != b"PFR2":
             raise RuntimeError("Invalid frame magic")
 
         offset = header_size
         head_bytes = blob[offset:offset + head_len]
         offset += head_len
         rgb_bytes = blob[offset:offset + rgb_len]
-        offset += rgb_len
-        # Depth bytes skipped or not present if daemon changed?
-        # Ideally we should update HTTP protocol too, but let's assume daemon still sends depth via HTTP for compatibility
-        # If we removed depth from daemon HTTP handler, this will break.
-        # Let's check camera_daemon.py changes... I removed get_depth_frame usage in do_GET /frame_bin
-        # So I need to update this reader too!
-        
-        # New Protocol without Depth: Header + Head + RGB
-        # Let's assume camera_daemon.py sends: <4sIHHII (Magic, HeadL, RGBW, RGBH, RGBL, DepthW=0, DepthH=0, DepthL=0)?
-        # Wait, I didn't update CameraHandler in camera_daemon.py yet!
-        # I only updated the SharedMemory part. The HTTP part still references get_depth_frame!
-        # I should have updated CameraHandler in camera_daemon.py as well to be consistent.
-        # But let's assume I only use SHM.
-        pass
 
         head = json.loads(head_bytes.decode("utf-8")) if head_bytes else {}
 
@@ -481,9 +468,9 @@ def get_synchronized_frame_http():
             'head_yaw': float(head.get('head_yaw', 0.0) or 0.0),
             'head_pitch': float(head.get('head_pitch', 0.0) or 0.0),
             'rgb_image': raw_to_image(rgb_bytes, rgb_w, rgb_h) if rgb_len > 0 else None,
-            'depth_data': depth_bytes if depth_len > 0 else None,
-            'depth_width': depth_w,
-            'depth_height': depth_h,
+            'depth_data': None,
+            'depth_width': 0,
+            'depth_height': 0,
         }
 
         return result

@@ -43,7 +43,9 @@ class ChatRealtimeHandler(
     var sessionController: ChatSessionController? = null
 
     // Track pending Google tool calls to cancel them if interrupted
-    private val pendingGoogleToolCalls = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    // Collections.newSetFromMap instead of ConcurrentHashMap.newKeySet (API 24): Pepper's tablet runs Android 6 (API 23)
+    private val pendingGoogleToolCalls: MutableSet<String> =
+        java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
     
     // Google Live API: counter to generate unique turn IDs
     private val googleTurnCounter = java.util.concurrent.atomic.AtomicInteger(0)

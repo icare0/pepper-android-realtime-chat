@@ -43,6 +43,8 @@ class GestureController {
         private const val SAFE_POSTURE_GRACE_PERIOD_MS = 2000L
         // Extended grace period for listening state before resetting if no interaction occurs
         private const val LISTENING_INACTIVITY_RESET_MS = 8000L
+        // Upper bound for holding EnforceTabletReachability (it blocks base movements while running)
+        private const val REACHABILITY_MAX_HOLD_MS = 3000L
 
         // Subtle thinking animation XML (pure head tilt up and to the side, zero arm movement/motor noise)
         private const val THINKING_ANIMATION_XML = """<?xml version="1.0" encoding="UTF-8"?>
@@ -164,8 +166,11 @@ class GestureController {
         val qiContext = robotContext as QiContext
         cachedQiContext = qiContext
 
-        // Cancel any pending safe posture reset
+        // Cancel any pending safe posture reset, and release the base: a tool call
+        // (move, turn, navigate...) usually follows the thinking phase
         cancelPendingSafePostureReset()
+        currentReachabilityFuture?.requestCancellation()
+        currentReachabilityFuture = null
 
         // Stop any active speech loop
         running = false
@@ -470,10 +475,19 @@ class GestureController {
         if (running || isThinking) return
         try {
             currentReachabilityFuture?.requestCancellation()
+            // EnforceTabletReachability runs until cancelled and, while running, makes every
+            // base/leg action fail (GoTo, turn, navigation, follow). Only hold it until the
+            // arms are in place, with a timeout in case positionReached never fires.
             currentReachabilityFuture = EnforceTabletReachabilityBuilder.with(qiContext)
                 .buildAsync()
                 .andThenCompose { reachability ->
-                    reachability?.async()?.run() ?: Future.of(null)
+                    val run = reachability.async().run()
+                    reachability.addOnPositionReachedListener { run.requestCancellation() }
+                    getOrCreateScheduler().schedule(
+                        { run.requestCancellation() },
+                        REACHABILITY_MAX_HOLD_MS, java.util.concurrent.TimeUnit.MILLISECONDS
+                    )
+                    run
                 }
             currentReachabilityFuture?.thenConsume { fut ->
                 if (fut.isSuccess) {

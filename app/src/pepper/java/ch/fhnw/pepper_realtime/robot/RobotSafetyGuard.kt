@@ -60,24 +60,6 @@ object RobotSafetyGuard {
             Result.unknown("Safety check failed: ${e.message}")
         }
     }
-
-    /**
-     * Resets the robot's arms and posture to a safe neutral position
-     * using EnforceTabletReachability (clears tablet and brings arms to rest).
-     */
-    fun resetToSafePosture(qiContext: QiContext?): com.aldebaran.qi.Future<Void>? {
-        if (qiContext == null) return null
-        return try {
-            com.aldebaran.qi.sdk.builder.EnforceTabletReachabilityBuilder.with(qiContext)
-                .buildAsync()
-                .andThenCompose { reachability ->
-                    reachability?.async()?.run() ?: com.aldebaran.qi.Future.of(null)
-                }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to initiate safe posture reset", e)
-            null
-        }
-    }
 }
 
 

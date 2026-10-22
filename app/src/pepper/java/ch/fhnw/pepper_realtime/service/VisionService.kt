@@ -107,10 +107,16 @@ class VisionService(activityContext: Context) {
         Log.i(TAG, "Capturing raw photo from robot head camera...")
         serviceScope.launch {
             try {
+                // thenConsume (not andThenConsume) so a failed capture still reaches the callback
                 action.andThenCompose { takePicture -> takePicture.async().run() }
-                    .andThenConsume { timestampedImageHandle ->
+                    .thenConsume { future ->
+                        if (!future.isSuccess) {
+                            Log.e(TAG, "Robot camera capture failed", future.error)
+                            callback(null)
+                            return@thenConsume
+                        }
                         try {
-                            val bitmap = convertToBitmap(timestampedImageHandle)
+                            val bitmap = convertToBitmap(future.value)
                             callback(bitmap)
                         } catch (e: Exception) {
                             Log.e(TAG, "Failed to convert robot camera image", e)
