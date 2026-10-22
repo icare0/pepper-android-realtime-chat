@@ -285,7 +285,7 @@ YOUTUBE_API_KEY=your_youtube_api_key
 ./gradlew assemblePepperRelease
 ```
 
-Use **Release** for normal use and performance testing on Pepper's older tablet. This is the non-debuggable variant used on the robot; `minifyEnabled` is currently `false`, so it is not an R8-shrunk/optimized build. The command produces an **unsigned** APK that must be signed before installation (see Step 4 below). On Windows PowerShell, use `.\gradlew.bat` instead of `./gradlew`.
+Use **Release** for normal use and performance testing on Pepper's older tablet. This is the non-debuggable variant used on the robot. It is R8-minified (`minifyEnabled true`, `shrinkResources true`) for faster UI on the tablet; keep rules for reflection/JNI libraries (QiSDK, Gson models, Azure Speech, sshj) are in `app/proguard-rules.pro`. If a release build crashes where the debug build works, a missing keep rule is the first thing to check. The command produces an **unsigned** APK that must be signed before installation (see Step 4 below). On Windows PowerShell, use `.\gradlew.bat` instead of `./gradlew`.
 
 **📱 Standalone Flavor**
 ```bash

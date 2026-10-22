@@ -70,7 +70,9 @@ android {
 
     buildTypes {
         release {
-            minifyEnabled false
+            // R8 is enabled for speed on Pepper's tablet; keep rules are in proguard-rules.pro
+            minifyEnabled true
+            shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
