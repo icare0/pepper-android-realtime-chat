@@ -18,6 +18,12 @@
 -keep class ch.fhnw.pepper_realtime.network.GoogleLiveEvents { *; }
 -keep class ch.fhnw.pepper_realtime.network.GoogleLiveEvents$* { *; }
 
+# API keys: ApiKeyManager reads BuildConfig fields by name via reflection. Without this,
+# R8 strips them and every provider connects with an empty key.
+-keep class ch.fhnw.pepper_realtime.BuildConfig {
+    public static <fields>;
+}
+
 # Data classes: MovementController reads SavedLocation.translation by reflection, and
 # persisted rules/settings are restored with enum valueOf()
 -keep class ch.fhnw.pepper_realtime.data.** { *; }
