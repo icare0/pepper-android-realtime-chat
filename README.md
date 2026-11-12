@@ -340,6 +340,21 @@ Use **Release** for normal use and performance testing on Pepper's older tablet.
 - **Device not listed**: Ensure same WiFi network, check IP address, restart ADB server (`adb kill-server && adb start-server`)
 - **"Unauthorized"**: Accept the USB debugging popup on Pepper's tablet
 
+#### One-command deployment (tablet app + face recognition server)
+
+`deploy-pepper.ps1` does everything below in one go: it signs and installs the release APK on the tablet, deploys the face recognition stack to the head, starts the server, checks that it answers, and restarts the app.
+
+```powershell
+# First time on a PC: build the head packages once (Docker Desktop running)
+.\tools\pepper-face-recognition\build.ps1
+
+# Deploy (IPs: tablet from its notifications, head = robot Wi-Fi address)
+.\deploy-pepper.ps1 -TabletIP 10.1.3.120 -HeadIP 10.1.3.132
+
+# Add -InstallKey the first time to type the robot password only once (default: nao)
+# Add -Rebuild to rebuild the APK first; -SkipApk / -SkipHead to do only one side
+```
+
 #### Step 4: Install the Release APK (Recommended)
 
 The following PowerShell commands reproduce the local release installation used on Pepper. Run them from the project root after connecting with ADB. They use Android SDK Build Tools `35.0.1`; adjust the SDK path/version if yours differs.
